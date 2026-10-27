@@ -8,14 +8,19 @@
 사용 예:
   ros2 launch security_patrol sim_world.launch.py
   ros2 launch security_patrol sim_world.launch.py gui:=false rviz:=false
-  ros2 launch security_patrol sim_world.launch.py render_engine:=ogre   # 화면이 깨질 때
+  ros2 launch security_patrol sim_world.launch.py software_render:=false   # GPU 가 OpenGL 3.3 이상일 때
+
+UTM 가상머신(virgl)은 OpenGL 3.3 을 지원하지 않아 ogre2 가 실행되지 않고,
+ogre(1) 엔진은 gpu_lidar 빔이 아래로 기울어 바닥을 찍는 문제가 있다.
+그래서 기본값은 Gazebo 만 CPU 렌더링(llvmpipe, OpenGL 4.5) + ogre2 로 띄운다.
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import (DeclareLaunchArgument, GroupAction, IncludeLaunchDescription,
+                            OpaqueFunction, SetEnvironmentVariable)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
@@ -31,14 +36,21 @@ def gazebo(context):
     world = LaunchConfiguration('world').perform(context)
     gui = LaunchConfiguration('gui').perform(context).lower() == 'true'
     engine = LaunchConfiguration('render_engine').perform(context)
+    software = LaunchConfiguration('software_render').perform(context).lower() == 'true'
 
     # -r: 바로 시뮬레이션 시작, -s: 화면 없이 서버만
     gz_args = f'-r {"" if gui else "-s "}--render-engine {engine} {world}'
     gz_launch = os.path.join(
         get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')
-    return [IncludeLaunchDescription(
+
+    # scoped 그룹 안에서만 환경변수를 바꿔 Gazebo 에만 CPU 렌더링을 적용한다 (RViz 는 GPU 그대로)
+    actions = []
+    if software:
+        actions.append(SetEnvironmentVariable('LIBGL_ALWAYS_SOFTWARE', '1'))
+    actions.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(gz_launch),
-        launch_arguments={'gz_args': gz_args}.items())]
+        launch_arguments={'gz_args': gz_args}.items()))
+    return [GroupAction(actions, scoped=True)]
 
 
 def generate_launch_description():
@@ -68,7 +80,10 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz', default_value='true', description='RViz 실행 여부'),
         DeclareLaunchArgument(
             'render_engine', default_value='ogre2',
-            description='Gazebo 렌더링 엔진 (가상머신에서 화면/라이다가 깨지면 ogre)'),
+            description='Gazebo 렌더링 엔진 (ogre 는 이 환경에서 라이다가 바닥을 찍으므로 비추천)'),
+        DeclareLaunchArgument(
+            'software_render', default_value='true',
+            description='Gazebo 를 CPU 로 렌더링 (UTM 가상머신용). GPU 가 OpenGL 3.3 이상이면 false'),
 
         OpaqueFunction(function=gazebo),
 
