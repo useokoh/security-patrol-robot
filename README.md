@@ -1,0 +1,63 @@
+# Security Patrol Robot
+
+출입 통제 구역(아무도 있어서는 안 되는 공간)을 순찰하는 ROS2 경비 로봇입니다.
+
+1. SLAM으로 구역의 **기준 지도**를 만들어 저장합니다.
+2. 저장된 지도 위에서 정해진 경로를 **순찰**합니다.
+3. 순찰 중 2D 라이다 데이터를 기준 지도와 비교해 **원래 없던 사람이나 물체**를 감지합니다.
+4. 감지하면 관리자에게 **위치와 함께 경보**를 보냅니다.
+
+## 하드웨어
+- ESP32 기반 4륜 스키드 스티어 로봇 (micro-ROS)
+- 360° 2D 라이다 (720점, 0.15~8 m, 약 6 Hz)
+- ESP32-CAM (선택)
+
+## 개발 환경
+- Ubuntu 22.04 (ARM64, Apple Silicon 맥의 UTM 가상머신)
+- ROS2 Humble
+- Gazebo Fortress (`ros_gz`)
+
+## 진행 상황
+전체 단계는 [PLAN.md](PLAN.md)를 참고하세요.
+
+- [ ] 1단계: Gazebo 시뮬레이션 환경 (통제 구역 월드 + 로봇 모델)
+- [ ] 2단계: SLAM 기준 지도 작성
+- [ ] 3단계: Nav2 자율주행
+- [ ] 4단계: 순찰 노드
+- [ ] 5단계: 이상 감지 노드
+- [ ] 6단계: 경보 노드
+- [ ] 7단계: 시뮬레이션 통합 시험
+- [ ] 8단계: 실제 로봇 이식
+
+## 실행 방법 (1단계)
+
+```bash
+# 의존성 설치
+sudo apt install -y ros-humble-desktop ros-humble-ros-gz ros-humble-xacro ros-humble-teleop-twist-keyboard
+
+# 빌드
+cd ~/security_patrol_ws
+colcon build --symlink-install
+source install/setup.bash
+
+# 시뮬레이션 실행 (Gazebo + RViz)
+ros2 launch security_patrol sim_world.launch.py
+
+# 다른 터미널: 키보드 조종
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# 다른 터미널: 센서 점검
+ros2 run security_patrol scan_check
+```
+
+## 패키지 구조
+
+```
+src/security_patrol/
+├── launch/sim_world.launch.py      # Gazebo + 브리지 + RViz 실행
+├── urdf/patrol_bot.urdf.xacro      # 로봇 모델 (실제/시뮬레이션 공용)
+├── urdf/patrol_bot.gazebo.xacro    # Gazebo 전용 플러그인 (구동, 라이다)
+├── worlds/restricted_area.world    # 8m x 6m 통제 구역
+├── rviz/sim_view.rviz
+└── security_patrol/scan_check.py   # /scan, /odom 수신 점검 노드
+```

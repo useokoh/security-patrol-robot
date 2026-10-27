@@ -1,0 +1,122 @@
+<?xml version="1.0"?>
+<!-- 출입 통제 구역 시뮬레이션 월드 (8m x 6m). 원점 = 방 중앙. Gazebo Fortress 용.
+     오른쪽 아래 구역은 x=1 칸막이로 나뉘어 있고 위쪽(y>0.5)으로만 통한다.
+     이 파일은 기준 상태이므로, 침입자/물체는 나중에 런타임에 따로 스폰한다. -->
+<sdf version="1.8">
+  <world name="restricted_area">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Fortress 는 필요한 기능을 시스템 플러그인으로 직접 켜야 한다 -->
+    <plugin filename="ignition-gazebo-physics-system" name="ignition::gazebo::systems::Physics"/>
+    <!-- 로봇/물체 스폰(create) 서비스 -->
+    <plugin filename="ignition-gazebo-user-commands-system" name="ignition::gazebo::systems::UserCommands"/>
+    <!-- GUI 에 장면 전달 -->
+    <plugin filename="ignition-gazebo-scene-broadcaster-system" name="ignition::gazebo::systems::SceneBroadcaster"/>
+    <!-- 라이다(gpu_lidar) 같은 렌더링 센서 -->
+    <plugin filename="ignition-gazebo-sensors-system" name="ignition::gazebo::systems::Sensors"/>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.8 0.8 0.8 1</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="restricted_area">
+      <static>true</static>
+      <link name="wall_north">
+        <pose>0.0 3.0 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>8.15 0.15 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>8.15 0.15 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="wall_south">
+        <pose>0.0 -3.0 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>8.15 0.15 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>8.15 0.15 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="wall_east">
+        <pose>4.0 0.0 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.15 6.15 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 6.15 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="wall_west">
+        <pose>-4.0 0.0 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.15 6.15 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 6.15 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="divider">
+        <pose>1.0 -1.25 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.15 3.5 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 3.5 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="stub_wall">
+        <pose>-1.0 2.4 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.15 1.2 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 1.2 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="pillar">
+        <pose>-2.0 0.8 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.4 0.4 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+          <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="cabinet">
+        <pose>-2.6 -2.3 0.4 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>1.2 0.5 0.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.2 0.5 0.8</size></box></geometry>
+          <material><ambient>0.6 0.45 0.3 1</ambient><diffuse>0.6 0.45 0.3 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="crate_ne">
+        <pose>2.8 1.8 0.3 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.6 0.6 0.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.6 0.6 0.6</size></box></geometry>
+          <material><ambient>0.6 0.45 0.3 1</ambient><diffuse>0.6 0.45 0.3 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="crate_se">
+        <pose>2.5 -1.8 0.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.8 0.4 0.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.8 0.4 0.5</size></box></geometry>
+          <material><ambient>0.6 0.45 0.3 1</ambient><diffuse>0.6 0.45 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

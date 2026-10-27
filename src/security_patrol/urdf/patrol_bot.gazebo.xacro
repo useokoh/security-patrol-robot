@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo Fortress 전용 설정. ros_gz_bridge 를 거쳐 실제 로봇과 같은 토픽/프레임이 나오도록 맞춘다.
+    Gazebo 쪽 토픽                                   →  ROS 쪽 (sim_world.launch.py 의 브리지에서 연결)
+    /cmd_vel                                         ←  /cmd_vel        (실제: ESP32 펌웨어)
+    /model/patrol_bot/odometry, /model/patrol_bot/pose → /odom, /tf (odom→base_link) (실제: robot_telemetry_publisher.py)
+    /world/restricted_area/model/patrol_bot/joint_state → /joint_states  (실제: robot_telemetry_publisher.py)
+    /scan (frame laser_frame, 720점, 0.15~8 m, 6 Hz)  →  /scan          (실제: lidar_publisher.py)
+  (patrol_bot 은 launch 파일에서 스폰할 때 붙이는 모델 이름)
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+        <xacro:macro name="wheel_gazebo" params="name">
+                <gazebo reference="${name}_wheel">
+                        <mu1>1.0</mu1>
+                        <mu2>1.0</mu2>
+                        <kp>1000000.0</kp>
+                        <kd>100.0</kd>
+                        <minDepth>0.001</minDepth>
+                </gazebo>
+        </xacro:macro>
+        <xacro:wheel_gazebo name="front_left"/>
+        <xacro:wheel_gazebo name="rear_left"/>
+        <xacro:wheel_gazebo name="front_right"/>
+        <xacro:wheel_gazebo name="rear_right"/>
+
+        <gazebo>
+                <!-- 4륜 스키드 스티어: 한쪽에 바퀴 조인트를 2개씩 준다 -->
+                <plugin filename="ignition-gazebo-diff-drive-system" name="ignition::gazebo::systems::DiffDrive">
+                        <left_joint>front_left_wheel_joint</left_joint>
+                        <left_joint>rear_left_wheel_joint</left_joint>
+                        <right_joint>front_right_wheel_joint</right_joint>
+                        <right_joint>rear_right_wheel_joint</right_joint>
+                        <wheel_separation>0.145</wheel_separation>
+                        <wheel_radius>0.0337</wheel_radius>
+                        <max_linear_acceleration>1.0</max_linear_acceleration>
+                        <max_angular_acceleration>3.0</max_angular_acceleration>
+                        <topic>/cmd_vel</topic>
+                        <!-- 바퀴 회전량 기반 odom 은 스키드 스티어 회전 시 미끄러짐 때문에 크게 틀어진다.
+                             그래서 이 값은 쓰지 않는 토픽으로 빼두고, 아래 OdometryPublisher 를 /odom 으로 쓴다. -->
+                        <odom_topic>/model/patrol_bot/wheel_odometry</odom_topic>
+                        <tf_topic>/model/patrol_bot/wheel_tf</tf_topic>
+                        <frame_id>odom</frame_id>
+                        <child_frame_id>base_link</child_frame_id>
+                </plugin>
+
+                <!-- 시뮬레이터의 실제 위치로 odom 계산 (실제 로봇은 엔코더 + 자이로 yaw 보정).
+                     /model/patrol_bot/odometry (Odometry) 와 /model/patrol_bot/pose (TF) 를 발행한다. -->
+                <plugin filename="ignition-gazebo-odometry-publisher-system" name="ignition::gazebo::systems::OdometryPublisher">
+                        <odom_frame>odom</odom_frame>
+                        <robot_base_frame>base_link</robot_base_frame>
+                        <odom_publish_frequency>30</odom_publish_frequency>
+                        <dimensions>2</dimensions>
+                </plugin>
+
+                <plugin filename="ignition-gazebo-joint-state-publisher-system" name="ignition::gazebo::systems::JointStatePublisher">
+                        <joint_name>front_left_wheel_joint</joint_name>
+                        <joint_name>rear_left_wheel_joint</joint_name>
+                        <joint_name>front_right_wheel_joint</joint_name>
+                        <joint_name>rear_right_wheel_joint</joint_name>
+                </plugin>
+        </gazebo>
+
+        <gazebo reference="laser_frame">
+                <sensor name="lidar" type="gpu_lidar">
+                        <always_on>true</always_on>
+                        <visualize>true</visualize>
+                        <update_rate>6</update_rate>
+                        <topic>/scan</topic>
+                        <!-- 기본값은 "patrol_bot/base_link/lidar" 같은 이름이라 실제 로봇과 같게 지정 -->
+                        <ignition_frame_id>laser_frame</ignition_frame_id>
+                        <lidar>
+                                <scan>
+                                        <horizontal>
+                                                <!-- 실제 lidar_publisher.py 와 동일: -π 부터 2π/720 간격으로 720점 -->
+                                                <samples>720</samples>
+                                                <resolution>1</resolution>
+                                                <min_angle>${-pi}</min_angle>
+                                                <max_angle>${-pi + 2*pi*719/720}</max_angle>
+                                        </horizontal>
+                                </scan>
+                                <range>
+                                        <min>0.15</min>
+                                        <max>8.0</max>
+                                        <resolution>0.001</resolution>
+                                </range>
+                                <noise>
+                                        <type>gaussian</type>
+                                        <mean>0.0</mean>
+                                        <stddev>0.01</stddev>
+                                </noise>
+                        </lidar>
+                </sensor>
+        </gazebo>
+
+</robot>
