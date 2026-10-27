@@ -117,7 +117,11 @@ class LocMonitor(Node):
         elif not is_lost and self.lost:
             log.info('위치 다시 찾음')
         self.lost = is_lost
-        (log.warn if is_lost else log.info)(line)
+        # rclpy 는 같은 줄의 로그 호출에서 심각도(warn/info)가 바뀌면 에러를 내므로 호출을 나눈다
+        if is_lost:
+            log.warn(line)
+        else:
+            log.info(line)
 
     def summary(self):
         self.get_logger().info(

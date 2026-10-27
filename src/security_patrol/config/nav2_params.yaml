@@ -8,11 +8,13 @@
 amcl:
   ros__parameters:
     use_sim_time: True
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
+    # odom 오차 예상치 (기본 0.2). 스키드 스티어는 제자리 회전 때 중심이 1~2 cm 흔들려서
+    # DifferentialMotionModel 이 오차를 과하게 잡고 파티클을 크게 흩뜨린다 → 조금 낮춤
+    alpha1: 0.1
+    alpha2: 0.1
+    alpha3: 0.1
+    alpha4: 0.1
+    alpha5: 0.1
     base_frame_id: "base_link"          # 기본 base_footprint
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
@@ -40,9 +42,9 @@ amcl:
     transform_tolerance: 1.0
     update_min_a: 0.15                  # 작은 로봇이라 조금만 움직여도 갱신 (기본 0.2)
     update_min_d: 0.1                   # (기본 0.25)
-    z_hit: 0.5
+    z_hit: 0.9                          # 라이다를 더 믿음 → 흩어진 파티클을 빨리 다시 모음 (기본 0.5)
     z_max: 0.05
-    z_rand: 0.5
+    z_rand: 0.1                         # (기본 0.5)
     z_short: 0.05
     scan_topic: scan
     # 시뮬레이션 시작 위치 (map 좌표 = Gazebo 월드 좌표). 실제 로봇은 RViz 2D Pose Estimate 로 지정
