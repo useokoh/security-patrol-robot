@@ -17,7 +17,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -35,9 +35,14 @@ def generate_launch_description():
         DeclareLaunchArgument('gui', default_value='true', description='Gazebo 화면 표시 여부'),
         DeclareLaunchArgument('rviz', default_value='true', description='RViz 실행 여부'),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(pkg_share, 'launch', 'sim_world.launch.py')),
-            launch_arguments={'rviz': 'false', 'gui': LaunchConfiguration('gui')}.items()),
+        # include 에 넘긴 인자는 범위가 나뉘지 않아 바깥 'rviz' 값까지 'false' 로 덮어쓴다.
+        # scoped 그룹으로 감싸서 sim_world 의 RViz 만 끄고, 아래 SLAM 용 RViz 는 그대로 띄운다.
+        GroupAction(scoped=True, actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(pkg_share, 'launch', 'sim_world.launch.py')),
+                launch_arguments={'rviz': 'false', 'gui': LaunchConfiguration('gui')}.items()),
+        ]),
 
         Node(
             package='slam_toolbox', executable='async_slam_toolbox_node', name='slam_toolbox',
