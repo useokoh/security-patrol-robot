@@ -3,6 +3,7 @@
 #   - 로봇: 약 0.23 x 0.19 m, 최고 속도 낮음, 제자리 회전 가능(명령 대비 약 80%)
 #   - 라이다: 360°, 0.15~8 m, 5~6 Hz
 #   - 프레임: map → odom → base_link (base_footprint 아님)
+#   - UTM 가상머신(CPU 렌더링)에서 CPU 가 부족해 AMCL 이 위치를 잃은 적이 있어 계산 주기를 낮췄다 (기본값은 주석에)
 
 amcl:
   ros__parameters:
@@ -24,8 +25,8 @@ amcl:
     laser_min_range: 0.15               # 라이다 최소 거리 (기본 -1.0)
     laser_model_type: "likelihood_field"
     max_beams: 90                       # 720점 중 사용할 빔 수 (기본 60)
-    max_particles: 2000
-    min_particles: 500
+    max_particles: 1000                 # CPU 절약 (기본 2000)
+    min_particles: 300                  # (기본 500)
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
@@ -58,7 +59,7 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /odom
-    bt_loop_duration: 10
+    bt_loop_duration: 20                # 판단 루프 50 Hz (기본 10 ms = 100 Hz)
     default_server_timeout: 20
     # plugin_lib_names 를 생략하면 Humble 기본 BT 노드 전체를 사용한다
 
@@ -73,7 +74,7 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     use_sim_time: True
-    controller_frequency: 20.0
+    controller_frequency: 10.0          # CPU 절약 (기본 20.0), 최고 0.2 m/s 라 10 Hz 로 충분
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -121,8 +122,8 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 3.0             # (기본 5.0)
+      publish_frequency: 1.0            # (기본 2.0)
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: True
@@ -204,7 +205,7 @@ map_saver:
 planner_server:
   ros__parameters:
     use_sim_time: True
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 5.0     # 경고 기준만 바꿈 (기본 20.0)
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
@@ -263,7 +264,7 @@ waypoint_follower:
 velocity_smoother:
   ros__parameters:
     use_sim_time: True
-    smoothing_frequency: 20.0
+    smoothing_frequency: 10.0           # 컨트롤러 주기에 맞춤 (기본 20.0)
     scale_velocities: False
     feedback: "OPEN_LOOP"
     max_velocity: [0.2, 0.0, 1.0]       # 기본 [0.26, 0.0, 1.0]

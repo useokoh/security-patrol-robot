@@ -6,8 +6,10 @@
   rviz2 (nav2_default_view.rviz) : 2D Pose Estimate / Nav2 Goal 도구 포함
 
 사용 예:
-  ros2 launch security_patrol nav.launch.py
-  # 다른 터미널: 자동 목표 주행 테스트
+  ros2 launch security_patrol nav.launch.py            # Gazebo 화면을 보려면 gui:=true
+  # 다른 터미널: 위치추정 점검 (AMCL 추정 vs 실제 위치)
+  ros2 run security_patrol loc_monitor --ros-args -p use_sim_time:=true
+  # 또 다른 터미널: 자동 목표 주행 테스트
   ros2 run security_patrol nav_test --ros-args -p use_sim_time:=true
 """
 
@@ -33,7 +35,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file', default_value=os.path.join(pkg_share, 'config', 'nav2_params.yaml'),
             description='Nav2 설정 파일'),
-        DeclareLaunchArgument('gui', default_value='true', description='Gazebo 화면 표시 여부'),
+        # 가상머신에서는 Gazebo 화면이 CPU 를 가장 많이 써서 기본으로 끈다 (로봇 상태는 RViz 로 확인)
+        DeclareLaunchArgument('gui', default_value='false', description='Gazebo 화면 표시 여부'),
         DeclareLaunchArgument('rviz', default_value='true', description='RViz 실행 여부'),
 
         # include 인자가 바깥 launch 설정을 덮어쓰지 않도록 각각 scoped 그룹으로 감싼다

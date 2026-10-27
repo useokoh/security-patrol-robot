@@ -72,12 +72,18 @@ ros2 run nav2_map_server map_saver_cli -f ~/security_patrol_ws/src/security_patr
 ## 실행 방법 (3단계: Nav2 자율주행)
 
 ```bash
-# 시뮬레이션 + 기준 지도 + AMCL 위치추정 + Nav2 + RViz
+# 시뮬레이션 + 기준 지도 + AMCL 위치추정 + Nav2 + RViz (Gazebo 화면은 기본으로 끔, 보려면 gui:=true)
 ros2 launch security_patrol nav.launch.py
 
-# 다른 터미널: 자동 목표 주행 테스트 (목표 4곳 → PASS/FAIL)
+# 다른 터미널: 위치추정 점검 (AMCL 추정 위치 vs 시뮬레이션 실제 위치, 1초마다)
+ros2 run security_patrol loc_monitor --ros-args -p use_sim_time:=true
+
+# 또 다른 터미널: 자동 목표 주행 테스트 (목표 4곳 → PASS/FAIL)
 ros2 run security_patrol nav_test --ros-args -p use_sim_time:=true
 ```
+
+UTM 가상머신은 CPU 로 화면을 그리기 때문에 CPU 가 부족하면 AMCL 이 위치를 잃을 수 있습니다.
+`loc_monitor` 의 `RTF`(시뮬레이션 속도)가 0.5 아래로 자주 떨어지면 Gazebo 화면이나 다른 프로그램을 꺼 주세요.
 
 RViz 에서 직접 해보려면 상단 `Nav2 Goal` 버튼을 누르고 지도 위를 클릭-드래그(방향)하면 됩니다.
 
@@ -99,5 +105,6 @@ src/security_patrol/
 ├── security_patrol/scan_check.py   # /scan, /odom 수신 점검 노드
 ├── security_patrol/motion_test.py  # 자동 주행 테스트 노드
 ├── security_patrol/auto_mapper.py  # 지도 작성용 웨이포인트 주행 노드
-└── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
+├── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
+└── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
 ```
