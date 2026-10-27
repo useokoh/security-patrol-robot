@@ -48,7 +48,12 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 # 다른 터미널: 센서 점검
 ros2 run security_patrol scan_check
+
+# 다른 터미널: 자동 주행 테스트 (전진 / 제자리 회전 → PASS/FAIL)
+ros2 run security_patrol motion_test --ros-args -p use_sim_time:=true
 ```
+
+> UTM 가상머신(Apple Silicon)에서는 GPU 가 OpenGL 3.3 을 지원하지 않아 Gazebo 를 CPU 로 렌더링합니다 (`software_render:=true`, 기본값).
 
 ## 패키지 구조
 
@@ -59,5 +64,6 @@ src/security_patrol/
 ├── urdf/patrol_bot.gazebo.xacro    # Gazebo 전용 플러그인 (구동, 라이다)
 ├── worlds/restricted_area.world    # 8m x 6m 통제 구역
 ├── rviz/sim_view.rviz
-└── security_patrol/scan_check.py   # /scan, /odom 수신 점검 노드
+├── security_patrol/scan_check.py   # /scan, /odom 수신 점검 노드
+└── security_patrol/motion_test.py  # 자동 주행 테스트 노드
 ```

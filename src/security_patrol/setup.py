@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scan_check = security_patrol.scan_check:main',
+            'motion_test = security_patrol.motion_test:main',
         ],
     },
 )
