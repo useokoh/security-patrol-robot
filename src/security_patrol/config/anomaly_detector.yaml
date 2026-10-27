@@ -1,0 +1,33 @@
+# 5단계 이상 감지 설정 (anomaly_detector). detect.launch.py 가 이 파일을 읽는다.
+# 값은 맥에서 가짜 라이다(실제 구역 배치로 계산)로 오경보/감지를 비교해서 정했다:
+#   - 위치추정 오차 0.1 m / 3° 까지 오경보 0개 (clearance 0.20, 거리 6 m 일 때는 4개)
+#   - 오차 5° 이상이면 먼 벽이 새 물체로 보이기 시작 → 그래서 AMCL σ 가 크면 감지를 쉰다
+anomaly_detector:
+  ros__parameters:
+    use_sim_time: true
+
+    # 지도 비교
+    clearance_radius: 0.25      # 지도 장애물에서 이 거리 안의 점은 '원래 있던 것' [m]. 벽에 이보다 가까이 붙은 물체는 못 찾음
+    unknown_is_obstacle: false  # false: 지도의 '모르는 칸'에 보이는 것도 이상으로 처리 (사각지대 감시)
+    max_range: 4.0              # 이보다 먼 점은 무시 [m]. 멀수록 각도 오차가 커져 오경보 (3° x 4 m = 0.21 m)
+
+    # 물체로 묶기
+    cluster_gap: 0.10           # 이웃한 라이다 점 사이가 이보다 멀면 다른 물체 [m]
+    merge_distance: 0.30        # 이 거리 안의 물체는 하나로 합침 (사람 발 두 개) [m]
+    min_points: 3               # 점이 이보다 적으면 잡음으로 버림 (10 cm 물체는 약 3.4 m 까지 보임)
+
+    # 크기 등급 (라이다 높이 약 13 cm 의 단면 폭)
+    small_max_width: 0.15       # 소형 < 0.15 m  (병, 작은 물건)       → 주의
+    large_min_width: 0.60       # 대형 >= 0.60 m (카트, 큰 상자, 가구)  → 경고 + 위치추정 오류 가능 표시
+    confirm_frames_small: 5     # 연속 몇 번 보여야 확정하는지 (스캔 1번 = 약 0.17초)
+    confirm_frames_medium: 3
+    confirm_frames_large: 3
+
+    # 추적
+    match_distance: 0.40        # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
+    max_misses: 3               # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
+
+    # 감지를 쉬는 조건 (오경보 방지)
+    max_sigma_xy: 0.35          # AMCL 위치 불확실성 [m]
+    max_sigma_yaw_deg: 15.0     # AMCL 방향 불확실성 [deg]
+    max_turn_rate: 0.3          # 이보다 빨리 회전 중이면 쉼 [rad/s]

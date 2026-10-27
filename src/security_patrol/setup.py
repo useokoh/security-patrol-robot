@@ -18,6 +18,7 @@ setup(
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*.xacro')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'maps'), glob('maps/*.yaml') + glob('maps/*.pgm')),
+        (os.path.join('share', package_name, 'models'), glob('models/*.sdf')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -33,6 +34,7 @@ setup(
             'nav_test = security_patrol.nav_test:main',
             'loc_monitor = security_patrol.loc_monitor:main',
             'patrol_node = security_patrol.patrol_node:main',
+            'anomaly_detector = security_patrol.anomaly_detector:main',
         ],
     },
 )

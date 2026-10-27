@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!-- 감지 테스트용 침입자: 라이다 높이(약 13 cm)에서 사람은 발목 두 개로 보이므로
+     지름 12 cm 기둥 두 개를 25 cm 간격으로 세웠다. 몸통은 라이다에 안 보이므로 생략. -->
+<sdf version="1.8">
+  <model name="intruder_person">
+    <static>true</static>
+    <link name="legs">
+      <collision name="left">
+        <pose>0 0.125 0.4 0 0 0</pose>
+        <geometry><cylinder><radius>0.06</radius><length>0.8</length></cylinder></geometry>
+      </collision>
+      <visual name="left_visual">
+        <pose>0 0.125 0.4 0 0 0</pose>
+        <geometry><cylinder><radius>0.06</radius><length>0.8</length></cylinder></geometry>
+        <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+      </visual>
+      <collision name="right">
+        <pose>0 -0.125 0.4 0 0 0</pose>
+        <geometry><cylinder><radius>0.06</radius><length>0.8</length></cylinder></geometry>
+      </collision>
+      <visual name="right_visual">
+        <pose>0 -0.125 0.4 0 0 0</pose>
+        <geometry><cylinder><radius>0.06</radius><length>0.8</length></cylinder></geometry>
+        <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+      </visual>
+    </link>
+  </model>
+</sdf>

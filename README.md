@@ -105,6 +105,24 @@ ros2 topic echo /patrol/status
 
 순찰 지점은 `config/patrol_route.yaml` 에서 바꿀 수 있습니다.
 
+## 실행 방법 (5단계: 이상 감지)
+
+```bash
+# 터미널 1: 시뮬레이션 + Nav2
+ros2 launch security_patrol nav.launch.py
+# 터미널 2: 이상 감지 (설정: config/anomaly_detector.yaml)
+ros2 launch security_patrol detect.launch.py
+# 터미널 3: 순찰
+ros2 run security_patrol patrol_node --ros-args -p use_sim_time:=true
+
+# 터미널 4: 침입자(사람 발 두 개 모양) 생성 → 터미널 2 에 '!!! 중형 물체 감지' 가 떠야 함
+ros2 run ros_gz_sim create -world restricted_area -name intruder1 -x -1.0 -y 0.0 \
+  -file $(ros2 pkg prefix security_patrol)/share/security_patrol/models/intruder_person.sdf
+```
+
+RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
+(소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).
+
 ## 패키지 구조
 
 ```
@@ -116,6 +134,9 @@ src/security_patrol/
 ├── config/slam_toolbox_mapping.yaml
 ├── config/mapping_route.yaml       # 지도 작성 자동 주행 경로
 ├── config/patrol_route.yaml        # 순찰 지점 목록
+├── config/anomaly_detector.yaml    # 이상 감지 설정
+├── launch/detect.launch.py         # 이상 감지 실행
+├── models/intruder_person.sdf      # 감지 테스트용 침입자 모델
 ├── maps/                           # 저장된 기준 지도
 ├── urdf/patrol_bot.urdf.xacro      # 로봇 모델 (실제/시뮬레이션 공용)
 ├── urdf/patrol_bot.gazebo.xacro    # Gazebo 전용 플러그인 (구동, 라이다)
@@ -126,5 +147,6 @@ src/security_patrol/
 ├── security_patrol/auto_mapper.py  # 지도 작성용 웨이포인트 주행 노드
 ├── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
 ├── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
-└── security_patrol/patrol_node.py  # 반복 순찰 노드
+├── security_patrol/patrol_node.py  # 반복 순찰 노드
+└── security_patrol/anomaly_detector.py  # 지도 비교 이상 감지 노드
 ```
