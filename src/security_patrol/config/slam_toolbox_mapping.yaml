@@ -1,0 +1,67 @@
+# slam_toolbox (online async) 지도 작성용 설정
+# 기본값(slam_toolbox mapper_params_online_async.yaml)에서 이 로봇에 맞게 바꾼 값에 주석을 달았다.
+slam_toolbox:
+  ros__parameters:
+    # 솔버
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # 프레임/토픽: 실제 로봇(robot_telemetry_publisher.py)과 같게 odom → base_link
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link          # 기본값 base_footprint → 이 로봇은 odom 이 base_link 를 직접 가리킴
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping
+
+    debug_logging: false
+    throttle_scans: 1              # 라이다가 5~6 Hz 로 느려서 스캔을 버리지 않는다
+    transform_publish_period: 0.05 # map → odom TF 20 Hz
+    map_update_interval: 2.0       # 지도 갱신을 자주 해서 그려지는 과정을 보기 쉽게 (기본 5.0)
+    resolution: 0.05               # 지도 한 칸 = 5 cm
+    max_laser_range: 8.0           # 라이다 최대 거리 (기본 20.0)
+    minimum_time_interval: 0.2     # 스캔 처리 최소 간격 (기본 0.5, 6 Hz 라이다에 맞춤)
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # 스캔 매칭: 작은 로봇이 천천히 움직이므로 지도에 스캔을 추가하는 이동 기준을 줄인다
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2   # 기본 0.5 m
+    minimum_travel_heading: 0.2    # 기본 0.5 rad
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # 상관 탐색 범위
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # 루프 클로저 탐색 범위
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # 스캔 매처 파라미터
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
