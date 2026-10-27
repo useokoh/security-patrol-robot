@@ -32,6 +32,7 @@ setup(
             'auto_mapper = security_patrol.auto_mapper:main',
             'nav_test = security_patrol.nav_test:main',
             'loc_monitor = security_patrol.loc_monitor:main',
+            'patrol_node = security_patrol.patrol_node:main',
         ],
     },
 )

@@ -87,6 +87,24 @@ UTM 가상머신은 CPU 로 화면을 그리기 때문에 CPU 가 부족하면 A
 
 RViz 에서 직접 해보려면 상단 `Nav2 Goal` 버튼을 누르고 지도 위를 클릭-드래그(방향)하면 됩니다.
 
+## 실행 방법 (4단계: 순찰)
+
+```bash
+# 터미널 1: 3단계와 같은 시뮬레이션 + Nav2
+ros2 launch security_patrol nav.launch.py
+
+# 터미널 2: 순찰 시작 (Ctrl+C 로 중단하면 진행 중인 이동도 취소)
+ros2 run security_patrol patrol_node --ros-args -p use_sim_time:=true
+
+# 자동 테스트: 2바퀴 돌고 실제 위치까지 확인 → PASS/FAIL
+ros2 run security_patrol patrol_node --ros-args -p use_sim_time:=true -p laps:=2 -p check_truth:=true
+
+# 순찰 상태 보기 (6단계 경보에서 사용할 토픽)
+ros2 topic echo /patrol/status
+```
+
+순찰 지점은 `config/patrol_route.yaml` 에서 바꿀 수 있습니다.
+
 ## 패키지 구조
 
 ```
@@ -97,6 +115,7 @@ src/security_patrol/
 ├── config/nav2_params.yaml         # Nav2 설정 (소형 스키드 스티어용)
 ├── config/slam_toolbox_mapping.yaml
 ├── config/mapping_route.yaml       # 지도 작성 자동 주행 경로
+├── config/patrol_route.yaml        # 순찰 지점 목록
 ├── maps/                           # 저장된 기준 지도
 ├── urdf/patrol_bot.urdf.xacro      # 로봇 모델 (실제/시뮬레이션 공용)
 ├── urdf/patrol_bot.gazebo.xacro    # Gazebo 전용 플러그인 (구동, 라이다)
@@ -106,5 +125,6 @@ src/security_patrol/
 ├── security_patrol/motion_test.py  # 자동 주행 테스트 노드
 ├── security_patrol/auto_mapper.py  # 지도 작성용 웨이포인트 주행 노드
 ├── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
-└── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
+├── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
+└── security_patrol/patrol_node.py  # 반복 순찰 노드
 ```
