@@ -8,8 +8,7 @@
 amcl:
   ros__parameters:
     use_sim_time: True
-    # odom 오차 예상치 (기본 0.2). 스키드 스티어는 제자리 회전 때 중심이 1~2 cm 흔들려서
-    # DifferentialMotionModel 이 오차를 과하게 잡고 파티클을 크게 흩뜨린다 → 조금 낮춤
+    # odom 오차 예상치 (기본 0.2). 시뮬레이션 odom 은 정확한 편이라 조금 낮춤 (alpha5 = 옆 미끄러짐)
     alpha1: 0.1
     alpha2: 0.1
     alpha3: 0.1
@@ -35,7 +34,10 @@ amcl:
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
     resample_interval: 1
-    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    # 시뮬레이션 전용: odom 이 Gazebo 실제 위치라서 스키드 스티어가 회전할 때 생기는 흔들림(1~2 cm)까지 들어온다.
+    # DifferentialMotionModel 은 이 흔들림을 '이동 방향'으로 해석해 오차를 과하게 잡으므로 Omni 모델을 쓴다.
+    # 실제 로봇(엔코더 + 자이로 odom)은 8단계에서 별도 설정 파일로 DifferentialMotionModel 을 쓴다.
+    robot_model_type: "nav2_amcl::OmniMotionModel"
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true

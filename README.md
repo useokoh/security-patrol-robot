@@ -78,7 +78,7 @@ ros2 launch security_patrol nav.launch.py
 # 다른 터미널: 위치추정 점검 (AMCL 추정 위치 vs 시뮬레이션 실제 위치, 1초마다)
 ros2 run security_patrol loc_monitor --ros-args -p use_sim_time:=true
 
-# 또 다른 터미널: 자동 목표 주행 테스트 (목표 4곳 → PASS/FAIL)
+# 또 다른 터미널: 자동 목표 주행 테스트 (목표 4곳 → PASS/FAIL, 시뮬레이션에서는 실제 위치 오차도 확인)
 ros2 run security_patrol nav_test --ros-args -p use_sim_time:=true
 ```
 
