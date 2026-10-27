@@ -21,7 +21,7 @@
 전체 단계는 [PLAN.md](PLAN.md)를 참고하세요.
 
 - [x] 1단계: Gazebo 시뮬레이션 환경 (통제 구역 월드 + 로봇 모델)
-- [ ] 2단계: SLAM 기준 지도 작성
+- [x] 2단계: SLAM 기준 지도 작성
 - [ ] 3단계: Nav2 자율주행
 - [ ] 4단계: 순찰 노드
 - [ ] 5단계: 이상 감지 노드
@@ -69,12 +69,26 @@ ros2 run security_patrol auto_mapper --ros-args -p use_sim_time:=true \
 ros2 run nav2_map_server map_saver_cli -f ~/security_patrol_ws/src/security_patrol/maps/restricted_area
 ```
 
+## 실행 방법 (3단계: Nav2 자율주행)
+
+```bash
+# 시뮬레이션 + 기준 지도 + AMCL 위치추정 + Nav2 + RViz
+ros2 launch security_patrol nav.launch.py
+
+# 다른 터미널: 자동 목표 주행 테스트 (목표 4곳 → PASS/FAIL)
+ros2 run security_patrol nav_test --ros-args -p use_sim_time:=true
+```
+
+RViz 에서 직접 해보려면 상단 `Nav2 Goal` 버튼을 누르고 지도 위를 클릭-드래그(방향)하면 됩니다.
+
 ## 패키지 구조
 
 ```
 src/security_patrol/
 ├── launch/sim_world.launch.py      # Gazebo + 브리지 + RViz 실행
 ├── launch/slam.launch.py           # 시뮬레이션 + slam_toolbox 지도 작성
+├── launch/nav.launch.py            # 시뮬레이션 + AMCL + Nav2 자율주행
+├── config/nav2_params.yaml         # Nav2 설정 (소형 스키드 스티어용)
 ├── config/slam_toolbox_mapping.yaml
 ├── config/mapping_route.yaml       # 지도 작성 자동 주행 경로
 ├── maps/                           # 저장된 기준 지도
@@ -84,5 +98,6 @@ src/security_patrol/
 ├── rviz/sim_view.rviz, slam_view.rviz
 ├── security_patrol/scan_check.py   # /scan, /odom 수신 점검 노드
 ├── security_patrol/motion_test.py  # 자동 주행 테스트 노드
-└── security_patrol/auto_mapper.py  # 지도 작성용 웨이포인트 주행 노드
+├── security_patrol/auto_mapper.py  # 지도 작성용 웨이포인트 주행 노드
+└── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
 ```
