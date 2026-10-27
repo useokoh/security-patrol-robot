@@ -56,6 +56,13 @@ def main(args=None):
     truth = {'odom': None}
     nav.create_subscription(Odometry, 'odom', lambda m: truth.update(odom=m), qos_profile_sensor_data)
 
+    # 주의: BasicNavigator.waitUntilNav2Active() 는 /amcl_pose 를 아직 못 받았으면
+    # 초기 위치를 (0, 0, 0) 으로 '발행'해서 AMCL 을 엉뚱한 곳으로 리셋해버린다.
+    # 그래서 먼저 AMCL 이 스스로 위치를 낼 때까지 기다린다 (시뮬레이션: nav2_params 의 initial_pose,
+    # 실제 로봇: RViz 2D Pose Estimate). 받은 뒤에는 waitUntilNav2Active 가 초기 위치를 발행하지 않는다.
+    log.info('AMCL 위치(/amcl_pose) 기다리는 중...')
+    while not nav.initial_pose_received:
+        rclpy.spin_once(nav, timeout_sec=0.5)
     log.info('Nav2 활성화 대기 중 (AMCL + bt_navigator)...')
     nav.waitUntilNav2Active()
     log.info('Nav2 준비 완료, 목표 주행 시작')
