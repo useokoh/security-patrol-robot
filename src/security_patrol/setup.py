@@ -35,6 +35,8 @@ setup(
             'loc_monitor = security_patrol.loc_monitor:main',
             'patrol_node = security_patrol.patrol_node:main',
             'anomaly_detector = security_patrol.anomaly_detector:main',
+            'incident_manager = security_patrol.incident_manager:main',
+            'intruder_walker = security_patrol.intruder_walker:main',
         ],
     },
 )

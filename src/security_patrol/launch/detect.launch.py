@@ -1,4 +1,4 @@
-"""5단계: 이상 감지 노드 실행 (nav.launch.py 가 켜져 있는 상태에서 실행).
+"""5단계: 이상 감지 노드와 사건 관리 노드 실행 (nav.launch.py 가 켜져 있는 상태에서 실행).
 
   ros2 launch security_patrol detect.launch.py
 """
@@ -22,5 +22,9 @@ def generate_launch_description():
 
         Node(
             package='security_patrol', executable='anomaly_detector', name='anomaly_detector',
+            output='screen', parameters=[LaunchConfiguration('params_file')]),
+
+        Node(
+            package='security_patrol', executable='incident_manager', name='incident_manager',
             output='screen', parameters=[LaunchConfiguration('params_file')]),
     ])

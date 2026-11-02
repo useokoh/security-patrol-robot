@@ -118,7 +118,19 @@ ros2 run security_patrol patrol_node --ros-args -p use_sim_time:=true
 # 터미널 4: 침입자(사람 발 두 개 모양) 생성 → 터미널 2 에 '!!! 중형 물체 감지' 가 떠야 함
 ros2 run ros_gz_sim create -world restricted_area -name intruder1 -x -1.0 -y 0.0 \
   -file $(ros2 pkg prefix security_patrol)/share/security_patrol/models/intruder_person.sdf
+# 터미널 5: 침입자를 왕복시킴 → 터미널 2 에 '[긴급] 사건 #1 등급 상승' 이 떠야 함
+ros2 run security_patrol intruder_walker
 ```
+
+경보는 2단계입니다: 긴급(움직이는 대상), 주의(멈춰 있는 새 물체). 폭 15 cm 미만의 작은 물체는
+순찰 한 바퀴마다 묶어서 알리고, 확인하지 않은 사건은 5분마다 다시 알립니다.
+알림은 `/anomaly/alerts` 로 나오고, 확인은 아래처럼 보냅니다 (6단계에서 휴대폰 버튼으로 연결).
+
+```bash
+ros2 topic pub --once /anomaly/ack std_msgs/msg/Int32 "{data: 1}"
+```
+
+판정 규칙은 ROS 없이 시험할 수 있습니다: `python3 -m unittest discover -s src/security_patrol/test`
 
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).

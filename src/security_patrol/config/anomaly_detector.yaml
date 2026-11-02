@@ -27,7 +27,25 @@ anomaly_detector:
     match_distance: 0.40        # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
     max_misses: 3               # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
 
+    # 이동 판정 (motion_judge.py)
+    moving_min_displacement: 0.30  # 앞쪽 1/3 평균과 뒤쪽 1/3 평균 사이가 이 거리 이상이어야 이동 [m]
+    moving_min_duration: 1.0       # 최소 관찰 시간 [초]
+    moving_min_samples: 6          # 최소 스캔 수
+    moving_window: 2.0             # 이 시간 안의 기록만 본다 [초]
+    robot_still_speed: 0.05        # 로봇이 이보다 빠르면 기준 거리에 물체 폭을 더한다 (보이는 면이 바뀌므로) [m/s]
+    moving_max_robot_speed: 0.25   # 로봇이 이보다 빠르면 판정을 미룬다 [m/s]. 순찰 속도는 0.15
+
     # 감지를 쉬는 조건 (오경보 방지)
     max_sigma_xy: 0.35          # AMCL 위치 불확실성 [m]
     max_sigma_yaw_deg: 15.0     # AMCL 방향 불확실성 [deg]
     max_turn_rate: 0.3          # 이보다 빨리 회전 중이면 쉼 [rad/s]
+
+# 5-2 사건 관리 설정 (incident_manager)
+incident_manager:
+  ros__parameters:
+    use_sim_time: true
+    same_place_distance: 0.5        # 이 거리 안에서 다시 보이면 같은 사건 [m]
+    relink_seconds: 10.0            # 움직이던 대상을 놓친 뒤 이 시간 안에 다시 보이면 같은 사건 [초]
+    relink_distance: 3.0            # 그때 이 거리 안이어야 같은 사건 [m]
+    remind_after_seconds: 300.0     # 미확인 사건을 다시 알리는 간격 [초]
+    batch_max_wait_seconds: 300.0   # 순찰 바퀴 신호가 없어도 소형 묶음을 이 시간 뒤에는 보낸다 [초]

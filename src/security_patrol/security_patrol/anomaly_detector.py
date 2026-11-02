@@ -7,10 +7,11 @@
   4. 새로운 점을 물체(클러스터)로 묶음. 가까운 클러스터(사람 발 두 개 등)는 하나로 합침
   5. 단면 폭으로 크기 등급 분류 (소형 / 중형 / 대형)
   6. 같은 자리에 등급별 횟수만큼 연속으로 보이면 '감지 확정' → 경고 출력 + /anomaly/detections 발행
+  7. 확정된 물체의 위치 기록으로 이동 여부를 판정 (motion_judge.py). 크기와 이동은 올라가기만 한다
 
 발행 토픽:
-  /anomaly/detections (std_msgs/String, JSON) : 감지 확정/사라짐 이벤트 → 6단계 경보에서 사용
-  /anomaly/markers    (visualization_msgs/MarkerArray) : RViz 표시 (소형 노랑 / 중형 주황 / 대형 빨강, 후보는 회색)
+  /anomaly/detections (std_msgs/String, JSON) : detected / upgraded / moving / cleared 이벤트 → incident_manager 에서 사용
+  /anomaly/markers    (visualization_msgs/MarkerArray) : RViz 표시 (소형 노랑 / 중형 주황 / 대형 빨강, 후보는 회색, 이동은 글자 MOVE)
 
   ros2 launch security_patrol detect.launch.py     # config/anomaly_detector.yaml 설정으로 실행
 """
@@ -30,6 +31,8 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
+from security_patrol.motion_judge import MotionJudge
+
 SIZE_NAMES = {'small': '소형', 'medium': '중형', 'large': '대형'}
 SIZE_LABELS = {'small': 'S', 'medium': 'M', 'large': 'L'}  # RViz 글자는 한글이 깨질 수 있어 영문
 SIZE_COLORS = {'small': (1.0, 0.9, 0.0), 'medium': (1.0, 0.5, 0.0), 'large': (1.0, 0.0, 0.0)}
@@ -42,7 +45,7 @@ def yaw_from_quaternion(q):
 class Track:
     """여러 스캔에 걸쳐 같은 자리에 보이는 물체 하나."""
 
-    def __init__(self, track_id, cluster, stamp):
+    def __init__(self, track_id, cluster, stamp, judge):
         self.id = track_id
         self.x, self.y, self.width, self.points = cluster
         self.hits = 1
@@ -50,6 +53,8 @@ class Track:
         self.confirmed = False
         self.first_seen = stamp
         self.size = None
+        self.judge = judge
+        self.moving = False
 
 
 class AnomalyDetector(Node):
@@ -76,6 +81,15 @@ class AnomalyDetector(Node):
         # 추적
         self.match_dist = p('match_distance', 0.40).value         # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
         self.max_misses = p('max_misses', 3).value                # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
+        # 이동 판정 (motion_judge.py)
+        self.motion_args = {
+            'min_displacement': p('moving_min_displacement', 0.30).value,  # [m]
+            'min_duration': p('moving_min_duration', 1.0).value,           # [초]
+            'min_samples': p('moving_min_samples', 6).value,
+            'window_sec': p('moving_window', 2.0).value,                   # [초]
+            'robot_still_speed': p('robot_still_speed', 0.05).value,       # 이보다 빠르면 기준에 물체 폭을 더함 [m/s]
+            'max_robot_speed': p('moving_max_robot_speed', 0.25).value,    # 이보다 빠르면 판정을 미룸 [m/s]
+        }
         # 감지 중지 조건 (오경보 방지)
         self.max_sigma_xy = p('max_sigma_xy', 0.35).value         # AMCL 위치 불확실성 [m]
         self.max_sigma_yaw = math.radians(p('max_sigma_yaw_deg', 15.0).value)
@@ -85,6 +99,7 @@ class AnomalyDetector(Node):
         self.known = None            # True = 지도상 장애물 근처 (원래 있던 것)
         self.amcl = None
         self.turn_rate = 0.0
+        self.robot_speed = 0.0
         self.tracks = []
         self.next_id = 1
         self.paused_reason = None
@@ -128,6 +143,7 @@ class AnomalyDetector(Node):
 
     def on_odom(self, msg):
         self.turn_rate = abs(msg.twist.twist.angular.z)
+        self.robot_speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
 
     # ---------- 감지 ----------
 
@@ -255,11 +271,13 @@ class AnomalyDetector(Node):
                 best.hits += 1
                 best.misses = 0
                 self.check_confirm(best, stamp)
+                self.check_motion(best, c, stamp)
             else:
-                track = Track(self.next_id, c, stamp)
+                track = Track(self.next_id, c, stamp, MotionJudge(**self.motion_args))
                 self.next_id += 1
                 self.tracks.append(track)
                 self.check_confirm(track, stamp)
+                self.check_motion(track, c, stamp)
 
         for t in unmatched:
             t.misses += 1
@@ -271,8 +289,24 @@ class AnomalyDetector(Node):
                         f'[#{t.id}] {SIZE_NAMES[t.size]} 물체 사라짐 ({t.x:+.2f}, {t.y:+.2f})')
                     self.publish_event('cleared', t, stamp)
 
+    def check_motion(self, t, cluster, stamp):
+        """이번 스캔의 실제 위치(평활 전)를 판정기에 넣는다. 한 번 이동으로 판정되면 되돌리지 않는다."""
+        now = stamp.nanoseconds / 1e9
+        is_moving = t.judge.update(now, cluster[0], cluster[1], t.width, self.robot_speed)
+        if is_moving and t.confirmed and not t.moving:
+            t.moving = True
+            self.get_logger().warn(
+                f'!!! [#{t.id}] 움직이는 대상: ({t.x:+.2f}, {t.y:+.2f}), 폭 {t.width:.2f} m')
+            self.publish_event('moving', t, stamp)
+
     def check_confirm(self, t, stamp):
         size = self.size_class(t.width)
+        if t.confirmed and size != t.size:
+            # width 는 가장 넓게 보인 값이라 크기 등급은 올라가기만 한다
+            self.get_logger().warn(
+                f'[#{t.id}] 크기 재평가: {SIZE_NAMES[t.size]} → {SIZE_NAMES[size]} (폭 {t.width:.2f} m)')
+            t.size = size
+            self.publish_event('upgraded', t, stamp)
         t.size = size
         if not t.confirmed and t.hits >= self.confirm[size]:
             t.confirmed = True
@@ -288,7 +322,7 @@ class AnomalyDetector(Node):
     def publish_event(self, event, t, stamp):
         data = {'event': event, 'id': t.id, 'size': t.size, 'size_name': SIZE_NAMES[t.size],
                 'x': round(t.x, 3), 'y': round(t.y, 3), 'width': round(t.width, 3),
-                'stamp': stamp.nanoseconds / 1e9}
+                'moving': t.moving, 'stamp': stamp.nanoseconds / 1e9}
         self.det_pub.publish(String(data=json.dumps(data, ensure_ascii=False)))
 
     def publish_markers(self, stamp):
@@ -328,7 +362,7 @@ class AnomalyDetector(Node):
                 label.pose.orientation.w = 1.0
                 label.scale.z = 0.2
                 label.color.r = label.color.g = label.color.b = label.color.a = 1.0
-                label.text = f'#{t.id} {SIZE_LABELS[t.size]} {t.width:.2f}m'
+                label.text = f'#{t.id} {SIZE_LABELS[t.size]} {t.width:.2f}m{" MOVE" if t.moving else ""}'
                 markers.markers.append(label)
         self.marker_pub.publish(markers)
 
