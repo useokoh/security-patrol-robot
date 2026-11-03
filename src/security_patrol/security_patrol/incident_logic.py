@@ -11,8 +11,10 @@ ROS 없이 동작하는 순수 로직이라 맥에서도 시험할 수 있다 (t
     이미 떨어진 곳에 있어 '같은 자리' 규칙에 걸리지 않기 때문이다. 합쳐도 긴급 알림은 그대로 나간다.
   - 소형 주의는 순찰 한 바퀴마다 묶어서 알린다. 바퀴 신호가 없어도 batch_max_wait 뒤에는 알린다.
     단 사람 후보(다리 두 개 패턴)는 한쪽 다리가 가려 소형으로 보인 것일 수 있으므로 묶지 않고 바로 알린다.
-  - 사람 후보는 표시만 하고 등급(긴급/주의)은 바꾸지 않는다. 이미 알린 사건이 나중에 사람 후보가 되어도 다시 알리지 않는다.
-  - 다시 알리는 경우는 '정지 → 이동'과 'remind_after 동안 미확인' 두 가지뿐이다.
+  - 사람 후보는 표시만 하고 등급(긴급/주의)은 바꾸지 않는다. 이미 알린 사건이 나중에 사람 후보가 되면
+    '사람 후보 추가'를 한 번 짧게 알린다. 첫 알림 때 다리 패턴이 아직 덜 쌓였을 수 있기 때문이다.
+    관리자가 이미 확인한 사건이어도 알리되, 확인 상태는 그대로 두어 재알림은 다시 시작하지 않는다.
+  - 다시 알리는 경우는 '정지 → 이동', '사람 후보 추가', 'remind_after 동안 미확인' 세 가지뿐이다.
   - '사라짐'은 사건을 닫지 않는다. 로봇이 멀어져도 안 보이기 때문이다. 사건은 관리자 확인으로 닫는다.
 
 모든 메서드는 보낼 알림 목록을 돌려준다: [{'alert': 종류, 'incidents': [사건 요약, ...]}, ...]
@@ -104,10 +106,12 @@ class IncidentBook:
 
         self._link(incident, event, now)
         incident.width = max(incident.width, event['width'])
+        # 이동이 먼저다: 긴급 알림에 사람 후보 표시가 함께 실리므로 따로 알릴 필요가 없다
+        if event.get('moving') and not incident.moving:
+            incident.person = incident.person or bool(event.get('person'))
+            return self._make_urgent(incident, now)
         if event.get('person') and not incident.person:
             return self._on_person(incident, now)
-        if event.get('moving') and not incident.moving:
-            return self._make_urgent(incident, now)
         return []
 
     def _on_moving(self, incident, event, now):
@@ -163,11 +167,16 @@ class IncidentBook:
         return []
 
     def _on_person(self, incident, now):
+        if incident.person:
+            return []
         incident.person = True
-        # 묶음을 기다리던 소형이 사람 후보가 되면 바로 알린다. 이미 알린 사건은 다시 알리지 않는다.
+        # 묶음을 기다리던 소형이 사람 후보가 되면 바로 알린다
         if incident in self.pending_small:
             self.pending_small.remove(incident)
             return self._send('new', [incident], now)
+        # 이미 알린 사건이면 사람 후보가 된 것만 한 번 더 알린다 (등급과 확인 상태는 그대로)
+        if incident.notified:
+            return self._send('person', [incident], now)
         return []
 
     def _find_existing(self, event, now):

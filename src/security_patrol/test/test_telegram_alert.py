@@ -86,6 +86,13 @@ class FormatTest(unittest.TestCase):
         self.assertIn('움직이는 대상(사람 후보)', text)
         self.assertNotIn('침입', text)
 
+    def test_person_added_alert(self):
+        person = dict(incident(), person=True)
+        text, keyboard = format_alert({'alert': 'person', 'incidents': [person]}, POINTS, SESSION)
+        self.assertTrue(text.splitlines()[0].endswith('[주의] 사람 후보 추가'))
+        self.assertIn('멈춰 있는 새 물체(사람 후보)', text)
+        self.assertEqual(len(keyboard), 1)
+
     def test_nearest_without_points(self):
         self.assertIsNone(nearest_point(0, 0, []))
 

@@ -21,7 +21,8 @@ from std_msgs.msg import Int32, String
 
 from security_patrol.incident_logic import IncidentBook
 
-ALERT_NAMES = {'new': '새 사건', 'escalated': '등급 상승', 'reminder': '미확인 재알림', 'batch': '소형 묶음'}
+ALERT_NAMES = {'new': '새 사건', 'escalated': '등급 상승', 'person': '사람 후보 추가',
+               'reminder': '미확인 재알림', 'batch': '소형 묶음'}
 
 
 class IncidentManager(Node):

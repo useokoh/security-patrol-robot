@@ -200,12 +200,51 @@ class IncidentBookTest(unittest.TestCase):
         e = dict(event('detected', 1, size='small', width=0.1), person=True)
         self.assertEqual(self.book.on_event(e, 0.0)[0]['alert'], 'new')
 
-    def test_person_on_notified_incident_is_silent_and_keeps_level(self):
+    def test_person_on_notified_incident_alerts_once_and_keeps_level(self):
+        # 7단계 시험에서 첫 알림 뒤에 사람 후보가 된 경우: 한 번만 짧게 알린다
         b = self.book
         b.on_event(event('detected', 1), 0.0)
-        self.assertEqual(b.on_event(event('person', 1), 1.0), [])
-        self.assertTrue(b.incidents[0].person)
-        self.assertEqual(b.incidents[0].level, '주의')
+        alerts = b.on_event(event('person', 1), 1.0)
+        self.assertEqual(alerts[0]['alert'], 'person')
+        self.assertTrue(alerts[0]['incidents'][0]['person'])
+        self.assertEqual(alerts[0]['incidents'][0]['level'], '주의')
+        self.assertEqual(b.on_event(event('person', 1), 2.0), [])
+        # 다음 바퀴에 같은 자리에서 사람 후보로 다시 잡혀도 또 알리지 않는다
+        b.on_event(event('cleared', 1), 10.0)
+        self.assertEqual(b.on_event(dict(event('detected', 2), person=True), 250.0), [])
+
+    def test_person_on_acked_incident_alerts_but_stays_acked(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.acknowledge(1, 1.0)
+        alerts = b.on_event(event('person', 1), 2.0)
+        self.assertEqual(alerts[0]['alert'], 'person')
+        self.assertTrue(alerts[0]['incidents'][0]['acked'])
+        self.assertEqual(b.tick(1000.0), [])     # 확인한 사건이라 재알림은 다시 시작하지 않는다
+
+    def test_person_alert_delays_next_reminder(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('person', 1), 200.0)
+        self.assertEqual(b.tick(300.0), [])
+        self.assertEqual(b.tick(500.0)[0]['alert'], 'reminder')
+
+    def test_person_before_first_alert_is_not_extra(self):
+        # 묶음을 기다리던 소형이 사람 후보가 되면 '새 사건' 하나만 나간다
+        b = self.book
+        b.on_event(event('detected', 1, size='small', width=0.1), 0.0)
+        alerts = b.on_event(event('person', 1, size='small', width=0.1), 1.0)
+        self.assertEqual([a['alert'] for a in alerts], ['new'])
+
+    def test_relinked_moving_person_escalates_with_one_alert(self):
+        # 다음 바퀴에 같은 자리에서 사람 후보이면서 움직이는 것으로 잡히면 등급 상승 하나에 표시를 싣는다
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('cleared', 1), 10.0)
+        alerts = b.on_event(dict(event('detected', 2, moving=True), person=True), 250.0)
+        self.assertEqual([a['alert'] for a in alerts], ['escalated'])
+        self.assertEqual(alerts[0]['incidents'][0]['level'], '긴급')
+        self.assertTrue(alerts[0]['incidents'][0]['person'])
 
     def test_person_flag_survives_next_lap_and_merge(self):
         b = self.book

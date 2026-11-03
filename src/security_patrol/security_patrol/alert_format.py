@@ -9,6 +9,7 @@ import math
 HEADERS = {
     'new': '새 사건',
     'escalated': '등급 상승',
+    'person': '사람 후보 추가',
     'reminder': '미확인 재알림',
     'batch': '작은 물체 묶음',
 }
