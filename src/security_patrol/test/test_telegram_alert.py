@@ -12,8 +12,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'security_patrol'))
 from alert_format import format_alert, nearest_point, parse_ack, remaining_keyboard  # noqa: E402
-from telegram_link import (AlertLink, TelegramClient, TelegramError, load_config,  # noqa: E402
-                           save_config)
+from telegram_link import (AlertLink, TelegramClient, TelegramError, extract_token,  # noqa: E402
+                           load_config, save_config)
+
+FAKE_TOKEN = '1234567890:' + 'A' * 35
 
 CHAT = 777
 SESSION = 123
@@ -73,6 +75,11 @@ class FormatTest(unittest.TestCase):
         self.assertNotIn('침입', text)
         self.assertNotIn('사람', text)
 
+    def test_merged_incident_is_named(self):
+        merged = dict(incident(1, '긴급', True), merged=[2])
+        text, _ = format_alert({'alert': 'escalated', 'incidents': [merged]}, POINTS, SESSION)
+        self.assertIn('(같은 대상: 사건 #2)', text)
+
     def test_nearest_without_points(self):
         self.assertIsNone(nearest_point(0, 0, []))
 
@@ -96,7 +103,7 @@ class LinkTest(unittest.TestCase):
         self.server.updates = []
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         base = f'http://127.0.0.1:{self.server.server_port}'
-        self.client = TelegramClient('SECRET', base_url=base)
+        self.client = TelegramClient(FAKE_TOKEN, base_url=base)
         self.link = AlertLink(self.client, CHAT, SESSION, POINTS)
 
     def tearDown(self):
@@ -110,7 +117,7 @@ class LinkTest(unittest.TestCase):
         self.link.enqueue({'alert': 'new', 'incidents': [incident()]})
         self.link.send_pending()
         path, method, body = self.server.calls[0]
-        self.assertEqual(path, '/botSECRET/sendMessage')
+        self.assertEqual(path, '/bot' + FAKE_TOKEN + '/sendMessage')
         self.assertEqual(body['chat_id'], CHAT)
         self.assertEqual(body['reply_markup']['inline_keyboard'][0][0]['text'], '#1 확인')
         self.assertEqual(len(self.link.queue), 0)
@@ -148,12 +155,30 @@ class LinkTest(unittest.TestCase):
         self.server.fail_status = [401]
         with self.assertRaises(TelegramError) as caught:
             self.client.call('getMe')
-        self.assertNotIn('SECRET', str(caught.exception))
-        offline = TelegramClient('SECRET', base_url='http://127.0.0.1:1')
+        self.assertNotIn(FAKE_TOKEN, str(caught.exception))
+        offline = TelegramClient(FAKE_TOKEN, base_url='http://127.0.0.1:1')
         with self.assertRaises(TelegramError) as caught:
             offline.call('getMe', timeout=1.0)
         self.assertTrue(caught.exception.retryable)
-        self.assertNotIn('SECRET', str(caught.exception))
+        self.assertNotIn(FAKE_TOKEN, str(caught.exception))
+
+    def test_control_characters_in_token_do_not_leak(self):
+        # 실제로 겪은 일: 붙여넣기 때 제어 문자가 섞여 http.client.InvalidURL 이 URL(토큰)을 출력했다
+        broken = TelegramClient(FAKE_TOKEN + '\x1bC\x1bV' + FAKE_TOKEN,
+                                base_url=f'http://127.0.0.1:{self.server.server_port}')
+        with self.assertRaises(TelegramError) as caught:
+            broken.call('getMe')
+        self.assertNotIn(FAKE_TOKEN, str(caught.exception))
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(self.server.calls, [])   # 잘못된 토큰으로는 요청 자체를 보내지 않는다
+        # 원래 오류(URL 포함)가 traceback 에 같이 찍히지 않아야 한다
+        self.assertIsNone(caught.exception.__context__)
+        self.assertIsNone(caught.exception.__cause__)
+
+    def test_extract_token(self):
+        self.assertEqual(extract_token(FAKE_TOKEN + '\x1bC\x1bV' + FAKE_TOKEN), FAKE_TOKEN)
+        self.assertEqual(extract_token(f'  {FAKE_TOKEN}\n'), FAKE_TOKEN)
+        self.assertIsNone(extract_token('hello'))
 
     def test_button_gives_ack_and_removes_only_pressed_button(self):
         self.server.updates = [button(10)]

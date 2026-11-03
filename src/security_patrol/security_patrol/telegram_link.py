@@ -6,6 +6,7 @@ ROS 없이 동작해서 맥에서도 가짜 서버로 시험할 수 있다 (test
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from collections import deque
@@ -25,6 +26,15 @@ class TelegramError(Exception):
     def __init__(self, message, retryable):
         super().__init__(message)
         self.retryable = retryable
+
+
+TOKEN_PATTERN = re.compile(r'\d{5,}:[A-Za-z0-9_-]{30,}')
+
+
+def extract_token(text):
+    """입력에서 봇 토큰 부분만 꺼낸다. 붙여넣기 때 섞인 제어 문자나 중복을 걸러낸다. 없으면 None."""
+    match = TOKEN_PATTERN.search(text)
+    return match.group(0) if match else None
 
 
 def load_config(path=DEFAULT_CONFIG):
@@ -51,6 +61,8 @@ class TelegramClient:
 
     def call(self, method, params=None, timeout=15.0):
         """API 를 호출해 result 를 돌려준다. 실패하면 TelegramError."""
+        if TOKEN_PATTERN.fullmatch(self.token) is None:
+            raise TelegramError(f'{method}: 토큰 형식 오류', False)
         request = urllib.request.Request(
             f'{self.base_url}/bot{self.token}/{method}',
             data=json.dumps(params or {}).encode('utf-8'),
@@ -62,7 +74,9 @@ class TelegramClient:
             e.close()
             # 429(너무 많이 보냄)와 서버 오류만 다시 시도한다. 나머지는 다시 보내도 같다.
             raise TelegramError(f'{method}: HTTP {e.code}', e.code == 429 or e.code >= 500) from None
-        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001
+            # 어떤 오류든 메시지에 URL(토큰 포함)이 들어갈 수 있으므로 종류 이름만 남긴다.
+            # 예: 토큰에 제어 문자가 섞이면 http.client.InvalidURL 이 URL 전체를 메시지에 넣는다.
             raise TelegramError(f'{method}: {type(e).__name__}', True) from None
 
 

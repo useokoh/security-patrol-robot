@@ -34,7 +34,11 @@ def format_alert(alert, points, session):
         where = f'({i["x"]:+.2f}, {i["y"]:+.2f})'
         if place:
             where += f', {place} 근처'
-        lines.append(f'사건 #{i["incident"]} {DESCRIPTIONS[i["moving"]]}: {where}, 폭 {i["width"]:.2f} m')
+        line = f'사건 #{i["incident"]} {DESCRIPTIONS[i["moving"]]}: {where}, 폭 {i["width"]:.2f} m'
+        if i.get('merged'):
+            # 먼저 다른 번호로 알렸던 같은 대상이면 관리자가 헷갈리지 않게 밝힌다
+            line += f' (같은 대상: 사건 {", ".join(f"#{n}" for n in i["merged"])})'
+        lines.append(line)
         keyboard.append([{'text': f'#{i["incident"]} 확인',
                           'callback_data': f'ack:{session}:{i["incident"]}'}])
     return '\n'.join(lines), keyboard

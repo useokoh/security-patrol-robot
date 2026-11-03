@@ -9,7 +9,8 @@
 import getpass
 import time
 
-from security_patrol.telegram_link import DEFAULT_CONFIG, TelegramClient, TelegramError, save_config
+from security_patrol.telegram_link import (DEFAULT_CONFIG, TelegramClient, TelegramError, extract_token,
+                                           save_config)
 
 WAIT_SECONDS = 180
 
@@ -34,7 +35,11 @@ def find_chat(client):
 
 
 def main():
-    token = getpass.getpass('봇 토큰을 붙여넣고 Enter (화면에 보이지 않습니다): ').strip()
+    token = extract_token(getpass.getpass('봇 토큰을 붙여넣고 Enter (화면에 보이지 않습니다): '))
+    if token is None:
+        # 입력 내용은 절대 출력하지 않는다
+        print('토큰 형식(숫자:영문)이 아닙니다. 다시 실행해 주세요.')
+        return
     client = TelegramClient(token)
     try:
         bot = client.call('getMe')

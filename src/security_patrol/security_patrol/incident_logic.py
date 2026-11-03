@@ -5,7 +5,10 @@ ROS 없이 동작하는 순수 로직이라 맥에서도 시험할 수 있다 (t
 규칙:
   - 물체 하나 = 사건 하나. 등급은 긴급(움직이는 대상) / 주의(멈춰 있는 새 물체) 2단계.
   - 다음 바퀴에 same_place_dist 안에서 다시 보이면 같은 사건이다 (다시 알리지 않음).
-  - 움직이던 대상을 잠깐 놓친 뒤 가까운 곳에서 다시 보이면 같은 사건이다.
+  - 움직이던 대상을 잠깐 놓친 뒤 가까운 곳에서 다시 보이면 같은 사건이다 (관리자가 확인했어도 마찬가지).
+  - 새로 잡힌 물체가 곧 움직이고, 가까이에 그 뒤로 안 보인 정지 사건이 있으면
+    그 정지 물체가 걷기 시작한 것으로 보고 두 사건을 합친다. 걷기 시작하면 로봇이 다시 볼 때
+    이미 떨어진 곳에 있어 '같은 자리' 규칙에 걸리지 않기 때문이다. 합쳐도 긴급 알림은 그대로 나간다.
   - 소형 주의는 순찰 한 바퀴마다 묶어서 알린다. 바퀴 신호가 없어도 batch_max_wait 뒤에는 알린다.
   - 다시 알리는 경우는 '정지 → 이동'과 'remind_after 동안 미확인' 두 가지뿐이다.
   - '사라짐'은 사건을 닫지 않는다. 로봇이 멀어져도 안 보이기 때문이다. 사건은 관리자 확인으로 닫는다.
@@ -34,11 +37,12 @@ class Incident:
         self.last_alert = None
         self.last_seen = now
         self.tracks = set()         # 지금 이 사건으로 보고 있는 감지 노드의 물체 번호
+        self.merged = []            # 같은 대상으로 보고 합친 사건 번호
 
     def summary(self):
         return {'incident': self.id, 'level': self.level, 'moving': self.moving, 'size': self.size,
                 'x': round(self.x, 2), 'y': round(self.y, 2), 'width': round(self.width, 2),
-                'acked': self.acked}
+                'acked': self.acked, 'merged': list(self.merged)}
 
 
 class IncidentBook:
@@ -102,7 +106,41 @@ class IncidentBook:
         incident.last_seen = now
         if incident.moving:
             return []
+        origin = self._find_walk_origin(incident, now)
+        if origin is not None:
+            incident = self._merge(incident, into=origin, now=now)
         return self._make_urgent(incident, now)
+
+    def _find_walk_origin(self, incident, now):
+        """방금 생긴 사건이 움직이면, 그 대상이 원래 서 있던 정지 사건을 찾는다 (없으면 None).
+
+        조건: 새 사건이 생긴 지 relink_sec 이내, 정지 사건이 relink_dist 안에 있고,
+        지금 보이지 않으며, 새 사건이 생긴 뒤로 한 번도 보이지 않았다.
+        """
+        if now - incident.created > self.relink_sec:
+            return None
+        best, best_dist = None, None
+        for other in self.incidents:
+            if other is incident or other.moving or other.tracks or other.last_seen >= incident.created:
+                continue
+            dist = math.hypot(other.x - incident.x, other.y - incident.y)
+            if dist <= self.relink_dist and (best is None or dist < best_dist):
+                best, best_dist = other, dist
+        return best
+
+    def _merge(self, incident, into, now):
+        """incident 를 into 에 합치고 into 를 돌려준다."""
+        for track in incident.tracks:
+            self.by_track[track] = into
+        into.tracks |= incident.tracks
+        into.merged += [incident.id] + incident.merged
+        into.x, into.y = incident.x, incident.y
+        into.width = max(into.width, incident.width)
+        into.last_seen = now
+        self.incidents.remove(incident)
+        if incident in self.pending_small:
+            self.pending_small.remove(incident)
+        return into
 
     def _on_upgraded(self, incident, event, now):
         incident.size = event['size']
@@ -120,7 +158,7 @@ class IncidentBook:
         for incident in self.incidents:
             dist = math.hypot(incident.x - event['x'], incident.y - event['y'])
             same_place = dist <= self.same_place_dist
-            relink = (incident.moving and not incident.acked and not incident.tracks
+            relink = (incident.moving and not incident.tracks
                       and now - incident.last_seen <= self.relink_sec and dist <= self.relink_dist)
             if (same_place or relink) and (best is None or dist < best_dist):
                 best, best_dist = incident, dist

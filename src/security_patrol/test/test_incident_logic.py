@@ -103,6 +103,89 @@ class IncidentBookTest(unittest.TestCase):
     def test_ack_unknown_incident(self):
         self.assertFalse(self.book.acknowledge(99, 0.0))
 
+    def test_vm_walker_log_stays_one_incident(self):
+        # 2026-11-03 VM 6단계 시험 로그 순서 그대로. 수정 전에는 사건 3개로 갈라졌다.
+        b = self.book
+        self.assertEqual(b.on_event(event('detected', 1, x=-1.00, y=-0.02, width=0.35), 2998.9)[0]['alert'], 'new')
+        b.acknowledge(1, 3016.8)
+        b.on_event(event('cleared', 1, x=-0.97, y=0.09), 3095.1)
+        b.on_event(event('detected', 5, x=-0.98, y=-0.09, width=0.25), 3514.7)
+        b.on_event(event('cleared', 5, x=-0.98, y=0.18), 3540.0)
+        # 침입자가 걷기 시작: 한쪽 다리만 보인 물체가 1 m 가까이 떨어진 곳에 잡힌다
+        self.assertEqual(b.on_event(event('detected', 7, x=-0.08, y=0.44, size='small', width=0.10), 3718.4), [])
+        b.on_event(event('cleared', 7, x=-0.08, y=0.44, size='small', width=0.10), 3722.4)
+        self.assertEqual(b.on_event(event('detected', 8, x=-0.05, y=0.52, size='small', width=0.07), 3724.0), [])
+        alerts = b.on_event(event('moving', 8, x=0.14, y=0.52, size='small', width=0.07), 3725.1)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]['alert'], 'escalated')
+        summary = alerts[0]['incidents'][0]
+        self.assertEqual((summary['incident'], summary['level'], summary['acked']), (1, '긴급', False))
+        self.assertEqual(len(b.incidents), 1)
+        self.assertEqual(b.pending_small, [])
+        self.assertEqual(b.on_event(event('upgraded', 8, x=0.14, y=0.52, width=0.24), 3726.4), [])
+        b.on_event(event('cleared', 8, x=-0.50, y=0.48), 3727.8)
+        self.assertEqual(b.on_event(event('detected', 9, x=-0.52, y=0.37, width=0.33), 3728.7), [])
+        self.assertEqual(b.on_event(event('moving', 9, x=0.12, y=0.45, width=0.33), 3730.1), [])
+        b.acknowledge(1, 3733.2)
+        # 확인한 뒤 놓쳤다 다시 보여도 같은 사건이다
+        b.on_event(event('cleared', 9, x=-0.70, y=0.37), 3769.0)
+        self.assertEqual(b.on_event(event('detected', 10, x=0.20, y=0.44, width=0.28), 3769.3), [])
+        self.assertEqual(b.on_event(event('moving', 10, x=0.22, y=0.41, width=0.28), 3775.4), [])
+        self.assertEqual(len(b.incidents), 1)
+        self.assertEqual(b.tick(3775.4 + 400), [])   # 확인했으므로 재알림 없음
+
+    def test_merged_incident_named_in_alert(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('cleared', 1), 10.0)
+        b.on_event(event('detected', 2, x=1.0), 20.0)          # 중형이라 바로 '새 사건 #2' 가 나감
+        alerts = b.on_event(event('moving', 2, x=1.5), 22.0)
+        self.assertEqual(alerts[0]['incidents'][0]['incident'], 1)
+        self.assertEqual(alerts[0]['incidents'][0]['merged'], [2])
+
+    def test_far_new_mover_is_separate_incident(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('cleared', 1), 10.0)
+        b.on_event(event('detected', 2, x=4.0, size='small', width=0.1), 20.0)
+        alerts = b.on_event(event('moving', 2, x=4.5), 22.0)
+        self.assertEqual(alerts[0]['incidents'][0]['incident'], 2)
+        self.assertEqual(len(b.incidents), 2)
+
+    def test_static_still_in_view_is_not_merged(self):
+        # 정지 물체가 지금도 보이면 근처에서 움직이는 것은 다른 대상이다
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('detected', 2, x=1.0, size='small', width=0.1), 20.0)
+        alerts = b.on_event(event('moving', 2, x=1.5), 22.0)
+        self.assertEqual(alerts[0]['incidents'][0]['incident'], 2)
+
+    def test_static_seen_after_new_one_appeared_is_not_merged(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('detected', 2, x=1.0, size='small', width=0.1), 20.0)
+        b.on_event(event('cleared', 1), 21.0)                  # 새 물체가 나타난 뒤에도 정지 물체가 보였다
+        alerts = b.on_event(event('moving', 2, x=1.5), 22.0)
+        self.assertEqual(alerts[0]['incidents'][0]['incident'], 2)
+
+    def test_old_new_incident_is_not_merged(self):
+        # 새 사건이 생긴 지 오래 지나서 움직이면 처음부터 따로 있던 물체로 본다
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('cleared', 1), 10.0)
+        b.on_event(event('detected', 2, x=1.0), 20.0)
+        alerts = b.on_event(event('moving', 2, x=1.5), 60.0)
+        self.assertEqual(alerts[0]['incidents'][0]['incident'], 2)
+
+    def test_acked_moving_target_relinks_silently(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('moving', 1, x=1.0), 1.0)
+        b.acknowledge(1, 2.0)
+        b.on_event(event('cleared', 1, x=2.0), 3.0)
+        self.assertEqual(b.on_event(event('detected', 2, x=4.0), 5.0), [])
+        self.assertEqual(len(b.incidents), 1)
+
     def test_acked_same_place_stays_silent(self):
         self.book.on_event(event('detected', 1), 0.0)
         self.book.acknowledge(1, 1.0)
