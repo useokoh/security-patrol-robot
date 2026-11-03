@@ -143,6 +143,15 @@ ros2 topic pub --once /anomaly/ack std_msgs/msg/Int32 "{data: 1}"
 
 판정 규칙은 ROS 없이 시험할 수 있습니다: `python3 -m unittest discover -s src/security_patrol/test`
 
+### 7단계 통합 시험
+
+시뮬레이션, 감지, 순찰을 켠 뒤 실행하면 `config/eval_scenario.yaml` 대로 4바퀴 동안 물체를 만들고 움직이며
+감지 지연·위치 오차·오경보·알림을 기록합니다. 끝나면 결과표를 출력하고 `~/security_patrol_ws/eval_results/` 에 저장합니다.
+
+```bash
+ros2 run security_patrol eval_run --ros-args -p use_sim_time:=true
+```
+
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).
 

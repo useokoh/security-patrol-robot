@@ -1,0 +1,17 @@
+# 7단계 통합 시험 시나리오 (eval_run). 순찰 바퀴 번호에 맞춰 물체를 만들고 움직인다.
+# 좌표는 map 프레임 [m]. 모든 위치는 저장된 지도에서 벽과 0.75 m 이상, 순찰 경로와 0.5 m 이상 떨어져 있다.
+#   1바퀴: 물체 없음 → 오경보 기준선
+#   2바퀴: 사람 모양 침입자, 상자, 작은 병 → 감지 지연·위치 오차·사람 후보·소형 묶음
+#   3바퀴: 침입자가 걷기 시작 → 긴급 상승, 사건 하나 유지
+#   4바퀴: 멀리 떨어진 두 번째 침입자 → 별도 사건
+# 시험 중에는 휴대폰 확인 버튼을 누르지 않는다 (미확인 재알림도 측정).
+eval:
+  laps: 4
+  world: restricted_area
+  objects:
+    - {name: intruder1, model: intruder_person.sdf, x: -1.0, y: 0.0, lap: 2, person: true}
+    - {name: test_box, model: test_box.sdf, x: 2.0, y: 0.0, lap: 2, person: false}
+    - {name: bottle, model: test_bottle.sdf, x: 0.0, y: -1.0, lap: 2, person: false}
+    - {name: intruder2, model: intruder_person.sdf, x: -2.2, y: -0.8, lap: 4, person: true}
+  walks:
+    - {name: intruder1, lap: 3, start: [-1.0, 0.3], end: [0.4, 0.3], speed: 0.5, duration: 90}

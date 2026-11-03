@@ -364,7 +364,9 @@ class AnomalyDetector(Node):
     def publish_event(self, event, t, stamp):
         data = {'event': event, 'id': t.id, 'size': t.size, 'size_name': SIZE_NAMES[t.size],
                 'x': round(t.x, 3), 'y': round(t.y, 3), 'width': round(t.width, 3),
-                'moving': t.moving, 'person': t.person, 'stamp': stamp.nanoseconds / 1e9}
+                'moving': t.moving, 'person': t.person,
+                'first_seen': t.first_seen.nanoseconds / 1e9,   # 7단계 확정 지연 측정용
+                'stamp': stamp.nanoseconds / 1e9}
         self.det_pub.publish(String(data=json.dumps(data, ensure_ascii=False)))
 
     def publish_markers(self, stamp):

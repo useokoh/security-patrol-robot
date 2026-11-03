@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!-- 7단계 시험용 작은 물체: 지름 8 cm, 높이 25 cm 병. 라이다에 소형(15 cm 미만)으로 보여야 하고,
+     주의 알림은 바로 오지 않고 순찰 한 바퀴마다 '작은 물체 묶음'으로 와야 한다. -->
+<sdf version="1.8">
+  <model name="test_bottle">
+    <static>true</static>
+    <link name="bottle">
+      <collision name="collision">
+        <pose>0 0 0.125 0 0 0</pose>
+        <geometry><cylinder><radius>0.04</radius><length>0.25</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <pose>0 0 0.125 0 0 0</pose>
+        <geometry><cylinder><radius>0.04</radius><length>0.25</length></cylinder></geometry>
+        <material><ambient>0.2 0.5 0.8 1</ambient><diffuse>0.2 0.5 0.8 1</diffuse></material>
+      </visual>
+    </link>
+  </model>
+</sdf>
