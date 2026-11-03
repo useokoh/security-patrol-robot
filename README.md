@@ -122,7 +122,8 @@ ros2 run ros_gz_sim create -world restricted_area -name intruder1 -x -1.0 -y 0.0
 ros2 run security_patrol intruder_walker
 ```
 
-경보는 2단계입니다: 긴급(움직이는 대상), 주의(멈춰 있는 새 물체). 폭 15 cm 미만의 작은 물체는
+경보는 2단계입니다: 긴급(움직이는 대상), 주의(멈춰 있는 새 물체).
+라이다 높이에서 다리 두 개 모양이 여러 번 보이면 `사람 후보`로 표시합니다. 탁자 다리도 같은 모양이라 단정하지 않고, 등급도 바꾸지 않습니다. 폭 15 cm 미만의 작은 물체는
 순찰 한 바퀴마다 묶어서 알리고, 확인하지 않은 사건은 5분마다 다시 알립니다.
 알림은 `/anomaly/alerts` 로 나오고, `alert_notifier` 가 이를 텔레그램으로 보냅니다.
 휴대폰에서 확인 버튼을 누르면 `/anomaly/ack` 로 전달되어 재알림이 멈춥니다.

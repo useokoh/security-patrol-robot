@@ -8,10 +8,11 @@
   5. 단면 폭으로 크기 등급 분류 (소형 / 중형 / 대형)
   6. 같은 자리에 등급별 횟수만큼 연속으로 보이면 '감지 확정' → 경고 출력 + /anomaly/detections 발행
   7. 확정된 물체의 위치 기록으로 이동 여부를 판정 (motion_judge.py). 크기와 이동은 올라가기만 한다
+  8. 합치기 전 조각이 다리 두 개 모양으로 여러 번 보이면 '사람 후보'로 표시 (person_hint.py, 표시용)
 
 발행 토픽:
-  /anomaly/detections (std_msgs/String, JSON) : detected / upgraded / moving / cleared 이벤트 → incident_manager 에서 사용
-  /anomaly/markers    (visualization_msgs/MarkerArray) : RViz 표시 (소형 노랑 / 중형 주황 / 대형 빨강, 후보는 회색, 이동은 글자 MOVE)
+  /anomaly/detections (std_msgs/String, JSON) : detected / upgraded / moving / person / cleared 이벤트 → incident_manager 에서 사용
+  /anomaly/markers    (visualization_msgs/MarkerArray) : RViz 표시 (소형 노랑 / 중형 주황 / 대형 빨강, 후보는 회색, 이동은 글자 MOVE, 사람 후보는 P?)
 
   ros2 launch security_patrol detect.launch.py     # config/anomaly_detector.yaml 설정으로 실행
 """
@@ -32,6 +33,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from security_patrol.motion_judge import MotionJudge
+from security_patrol.person_hint import is_leg_pair
 from security_patrol.tracking import associate
 
 SIZE_NAMES = {'small': '소형', 'medium': '중형', 'large': '대형'}
@@ -48,7 +50,9 @@ class Track:
 
     def __init__(self, track_id, cluster, stamp, judge):
         self.id = track_id
-        self.x, self.y, self.width, self.points = cluster
+        self.x, self.y, self.width, self.points = cluster[:4]
+        self.leg_frames = 0          # 다리 두 개 패턴으로 보인 스캔 수
+        self.person = False          # 사람 후보 (표시용, 한 번 정해지면 유지)
         self.hits = 1
         self.misses = 0
         self.confirmed = False
@@ -82,6 +86,7 @@ class AnomalyDetector(Node):
         # 추적
         self.match_dist = p('match_distance', 0.40).value         # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
         self.rematch_dist = p('moving_rematch_distance', 1.0).value  # 움직이는 대상은 이 거리 안이면 이어 붙임 [m]
+        self.person_frames = p('person_frames', 3).value          # 다리 두 개 패턴이 이만큼 보이면 사람 후보
         self.max_misses = p('max_misses', 3).value                # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
         # 이동 판정 (motion_judge.py)
         self.motion_args = {
@@ -227,6 +232,8 @@ class AnomalyDetector(Node):
         groups = [np.array(g) for g in groups]
 
         # 2) 가까운 묶음끼리 합치기 (사람 발 두 개처럼 사이에 배경이 보이는 경우)
+        #    합치기 전 조각(segments)은 사람 후보 판정에 쓰려고 따로 기억한다
+        pieces = [[g] for g in groups]
         merged = True
         while merged and len(groups) > 1:
             merged = False
@@ -236,6 +243,7 @@ class AnomalyDetector(Node):
                                         groups[a][:, None, 1] - groups[b][None, :, 1]))
                     if d <= self.merge_dist:
                         groups[a] = np.vstack([groups[a], groups.pop(b)])
+                        pieces[a] += pieces.pop(b)
                         merged = True
                         break
                 if merged:
@@ -243,14 +251,19 @@ class AnomalyDetector(Node):
 
         # 3) 점이 너무 적은 것은 잡음으로 버리고, 중심과 폭 계산
         clusters = []
-        for g in groups:
+        for g, parts in zip(groups, pieces):
             if len(g) < self.min_points:
                 continue
-            diff = g[:, None, :] - g[None, :, :]
-            width = float(np.max(np.hypot(diff[..., 0], diff[..., 1])))
             cx, cy = g.mean(axis=0)
-            clusters.append((float(cx), float(cy), width, len(g)))
+            segments = [(*map(float, p.mean(axis=0)), self.width_of(p), len(p)) for p in parts]
+            clusters.append((float(cx), float(cy), self.width_of(g), len(g), segments))
         return clusters
+
+    @staticmethod
+    def width_of(points):
+        """점들 중 가장 먼 두 점 사이 거리 [m]."""
+        diff = points[:, None, :] - points[None, :, :]
+        return float(np.max(np.hypot(diff[..., 0], diff[..., 1])))
 
     def size_class(self, width):
         if width < self.small_max:
@@ -277,12 +290,14 @@ class AnomalyDetector(Node):
             best.misses = 0
             self.check_confirm(best, stamp)
             self.check_motion(best, c, stamp)
+            self.check_person(best, c, stamp)
         for c in new_clusters:
             track = Track(self.next_id, c, stamp, MotionJudge(**self.motion_args))
             self.next_id += 1
             self.tracks.append(track)
             self.check_confirm(track, stamp)
             self.check_motion(track, c, stamp)
+            self.check_person(track, c, stamp)
 
         for t in unmatched:
             t.misses += 1
@@ -303,6 +318,16 @@ class AnomalyDetector(Node):
             self.get_logger().warn(
                 f'!!! [#{t.id}] 움직이는 대상: ({t.x:+.2f}, {t.y:+.2f}), 폭 {t.width:.2f} m')
             self.publish_event('moving', t, stamp)
+
+    def check_person(self, t, cluster, stamp):
+        """다리 두 개 패턴이 person_frames 번 보이면 사람 후보로 표시한다 (표시용, 등급은 안 바꿈)."""
+        if is_leg_pair(cluster[4]):
+            t.leg_frames += 1
+        if t.confirmed and not t.person and t.leg_frames >= self.person_frames:
+            t.person = True
+            self.get_logger().warn(
+                f'[#{t.id}] 사람 후보: 다리 두 개 패턴 {t.leg_frames}번 ({t.x:+.2f}, {t.y:+.2f})')
+            self.publish_event('person', t, stamp)
 
     def check_confirm(self, t, stamp):
         size = self.size_class(t.width)
@@ -327,7 +352,7 @@ class AnomalyDetector(Node):
     def publish_event(self, event, t, stamp):
         data = {'event': event, 'id': t.id, 'size': t.size, 'size_name': SIZE_NAMES[t.size],
                 'x': round(t.x, 3), 'y': round(t.y, 3), 'width': round(t.width, 3),
-                'moving': t.moving, 'stamp': stamp.nanoseconds / 1e9}
+                'moving': t.moving, 'person': t.person, 'stamp': stamp.nanoseconds / 1e9}
         self.det_pub.publish(String(data=json.dumps(data, ensure_ascii=False)))
 
     def publish_markers(self, stamp):
@@ -367,7 +392,7 @@ class AnomalyDetector(Node):
                 label.pose.orientation.w = 1.0
                 label.scale.z = 0.2
                 label.color.r = label.color.g = label.color.b = label.color.a = 1.0
-                label.text = f'#{t.id} {SIZE_LABELS[t.size]} {t.width:.2f}m{" MOVE" if t.moving else ""}'
+                label.text = f'#{t.id} {SIZE_LABELS[t.size]} {t.width:.2f}m{" MOVE" if t.moving else ""}{" P?" if t.person else ""}'
                 markers.markers.append(label)
         self.marker_pub.publish(markers)
 

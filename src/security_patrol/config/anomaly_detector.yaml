@@ -26,6 +26,9 @@ anomaly_detector:
     # 추적
     match_distance: 0.40        # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
     moving_rematch_distance: 1.0  # 움직이는 대상이 크게 옮겨 보여도 이 거리 안이면 같은 물체 [m] (tracking.py)
+
+    # 사람 후보 (person_hint.py, 표시용이며 등급은 바꾸지 않음)
+    person_frames: 3            # 다리 두 개 패턴이 이만큼 보이면 사람 후보
     max_misses: 3               # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
 
     # 이동 판정 (motion_judge.py)

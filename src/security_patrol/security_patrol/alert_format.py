@@ -1,7 +1,7 @@
 """6단계 알림 문구와 확인 버튼을 만든다.
 
 ROS 없이 동작하는 순수 로직이라 맥에서도 시험할 수 있다 (test/test_telegram_alert.py).
-문구는 측정한 사실만 쓰고 침입자나 사람이라고 단정하지 않는다.
+문구는 측정한 사실만 쓰고 침입자나 사람이라고 단정하지 않는다 (다리 두 개 패턴이면 '사람 후보'까지만).
 """
 
 import math
@@ -34,7 +34,10 @@ def format_alert(alert, points, session):
         where = f'({i["x"]:+.2f}, {i["y"]:+.2f})'
         if place:
             where += f', {place} 근처'
-        line = f'사건 #{i["incident"]} {DESCRIPTIONS[i["moving"]]}: {where}, 폭 {i["width"]:.2f} m'
+        what = DESCRIPTIONS[i['moving']]
+        if i.get('person'):
+            what += '(사람 후보)'   # 다리 두 개 패턴일 뿐이라 '후보'로만 쓴다
+        line = f'사건 #{i["incident"]} {what}: {where}, 폭 {i["width"]:.2f} m'
         if i.get('merged'):
             # 먼저 다른 번호로 알렸던 같은 대상이면 관리자가 헷갈리지 않게 밝힌다
             line += f' (같은 대상: 사건 {", ".join(f"#{n}" for n in i["merged"])})'

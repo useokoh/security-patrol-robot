@@ -186,6 +186,36 @@ class IncidentBookTest(unittest.TestCase):
         self.assertEqual(b.on_event(event('detected', 2, x=4.0), 5.0), [])
         self.assertEqual(len(b.incidents), 1)
 
+    def test_small_person_candidate_alerts_now(self):
+        # 한쪽 다리가 가려 소형으로 보여도 사람 후보면 묶음으로 미루지 않는다
+        b = self.book
+        self.assertEqual(b.on_event(event('detected', 1, size='small', width=0.1), 0.0), [])
+        alerts = b.on_event(event('person', 1, size='small', width=0.1), 1.0)
+        self.assertEqual(alerts[0]['alert'], 'new')
+        self.assertEqual(alerts[0]['incidents'][0]['level'], '주의')
+        self.assertTrue(alerts[0]['incidents'][0]['person'])
+        self.assertEqual(b.pending_small, [])
+
+    def test_small_detected_as_person_skips_batch(self):
+        e = dict(event('detected', 1, size='small', width=0.1), person=True)
+        self.assertEqual(self.book.on_event(e, 0.0)[0]['alert'], 'new')
+
+    def test_person_on_notified_incident_is_silent_and_keeps_level(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        self.assertEqual(b.on_event(event('person', 1), 1.0), [])
+        self.assertTrue(b.incidents[0].person)
+        self.assertEqual(b.incidents[0].level, '주의')
+
+    def test_person_flag_survives_next_lap_and_merge(self):
+        b = self.book
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('person', 1), 1.0)
+        b.on_event(event('cleared', 1), 10.0)
+        b.on_event(event('detected', 2, x=1.0, size='small', width=0.1), 20.0)
+        alerts = b.on_event(event('moving', 2, x=1.5), 22.0)
+        self.assertTrue(alerts[0]['incidents'][0]['person'])
+
     def test_acked_same_place_stays_silent(self):
         self.book.on_event(event('detected', 1), 0.0)
         self.book.acknowledge(1, 1.0)

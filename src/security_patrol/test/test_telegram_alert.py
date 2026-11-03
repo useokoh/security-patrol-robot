@@ -80,6 +80,12 @@ class FormatTest(unittest.TestCase):
         text, _ = format_alert({'alert': 'escalated', 'incidents': [merged]}, POINTS, SESSION)
         self.assertIn('(같은 대상: 사건 #2)', text)
 
+    def test_person_candidate_is_only_a_candidate(self):
+        person = dict(incident(1, '긴급', True), person=True)
+        text, _ = format_alert({'alert': 'escalated', 'incidents': [person]}, POINTS, SESSION)
+        self.assertIn('움직이는 대상(사람 후보)', text)
+        self.assertNotIn('침입', text)
+
     def test_nearest_without_points(self):
         self.assertIsNone(nearest_point(0, 0, []))
 

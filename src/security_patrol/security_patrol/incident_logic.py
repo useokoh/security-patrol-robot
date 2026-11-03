@@ -10,6 +10,8 @@ ROS 없이 동작하는 순수 로직이라 맥에서도 시험할 수 있다 (t
     그 정지 물체가 걷기 시작한 것으로 보고 두 사건을 합친다. 걷기 시작하면 로봇이 다시 볼 때
     이미 떨어진 곳에 있어 '같은 자리' 규칙에 걸리지 않기 때문이다. 합쳐도 긴급 알림은 그대로 나간다.
   - 소형 주의는 순찰 한 바퀴마다 묶어서 알린다. 바퀴 신호가 없어도 batch_max_wait 뒤에는 알린다.
+    단 사람 후보(다리 두 개 패턴)는 한쪽 다리가 가려 소형으로 보인 것일 수 있으므로 묶지 않고 바로 알린다.
+  - 사람 후보는 표시만 하고 등급(긴급/주의)은 바꾸지 않는다. 이미 알린 사건이 나중에 사람 후보가 되어도 다시 알리지 않는다.
   - 다시 알리는 경우는 '정지 → 이동'과 'remind_after 동안 미확인' 두 가지뿐이다.
   - '사라짐'은 사건을 닫지 않는다. 로봇이 멀어져도 안 보이기 때문이다. 사건은 관리자 확인으로 닫는다.
 
@@ -31,6 +33,7 @@ class Incident:
         self.width = width
         self.level = CAUTION
         self.moving = False
+        self.person = False         # 사람 후보 (표시용)
         self.acked = False
         self.notified = False       # 관리자에게 한 번이라도 알렸는지 (소형은 묶음 전까지 False)
         self.created = now
@@ -40,7 +43,8 @@ class Incident:
         self.merged = []            # 같은 대상으로 보고 합친 사건 번호
 
     def summary(self):
-        return {'incident': self.id, 'level': self.level, 'moving': self.moving, 'size': self.size,
+        return {'incident': self.id, 'level': self.level, 'moving': self.moving, 'person': self.person,
+                'size': self.size,
                 'x': round(self.x, 2), 'y': round(self.y, 2), 'width': round(self.width, 2),
                 'acked': self.acked, 'merged': list(self.merged)}
 
@@ -74,6 +78,8 @@ class IncidentBook:
             return self._on_moving(incident, event, now)
         if kind == 'upgraded':
             return self._on_upgraded(incident, event, now)
+        if kind == 'person':
+            return self._on_person(incident, now)
         if kind == 'cleared':
             incident.x, incident.y = event['x'], event['y']
             incident.last_seen = now
@@ -88,15 +94,18 @@ class IncidentBook:
             self.next_id += 1
             self.incidents.append(incident)
             self._link(incident, event, now)
+            incident.person = bool(event.get('person'))
             if event.get('moving'):
                 return self._make_urgent(incident, now)
-            if incident.size == 'small':
+            if incident.size == 'small' and not incident.person:
                 self.pending_small.append(incident)
                 return []
             return self._send('new', [incident], now)
 
         self._link(incident, event, now)
         incident.width = max(incident.width, event['width'])
+        if event.get('person') and not incident.person:
+            return self._on_person(incident, now)
         if event.get('moving') and not incident.moving:
             return self._make_urgent(incident, now)
         return []
@@ -136,6 +145,7 @@ class IncidentBook:
         into.merged += [incident.id] + incident.merged
         into.x, into.y = incident.x, incident.y
         into.width = max(into.width, incident.width)
+        into.person = into.person or incident.person
         into.last_seen = now
         self.incidents.remove(incident)
         if incident in self.pending_small:
@@ -147,6 +157,14 @@ class IncidentBook:
         incident.width = max(incident.width, event['width'])
         incident.last_seen = now
         # 묶음을 기다리던 소형이 더 커졌으면 바로 알린다. 이미 알린 사건은 다시 알리지 않는다.
+        if incident in self.pending_small:
+            self.pending_small.remove(incident)
+            return self._send('new', [incident], now)
+        return []
+
+    def _on_person(self, incident, now):
+        incident.person = True
+        # 묶음을 기다리던 소형이 사람 후보가 되면 바로 알린다. 이미 알린 사건은 다시 알리지 않는다.
         if incident in self.pending_small:
             self.pending_small.remove(incident)
             return self._send('new', [incident], now)
