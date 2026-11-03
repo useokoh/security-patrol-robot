@@ -288,16 +288,18 @@ class AnomalyDetector(Node):
             best.points = c[3]
             best.hits += 1
             best.misses = 0
+            self.count_legs(best, c)
             self.check_confirm(best, stamp)
             self.check_motion(best, c, stamp)
-            self.check_person(best, c, stamp)
+            self.check_person(best, stamp)
         for c in new_clusters:
             track = Track(self.next_id, c, stamp, MotionJudge(**self.motion_args))
             self.next_id += 1
             self.tracks.append(track)
+            self.count_legs(track, c)
             self.check_confirm(track, stamp)
             self.check_motion(track, c, stamp)
-            self.check_person(track, c, stamp)
+            self.check_person(track, stamp)
 
         for t in unmatched:
             t.misses += 1
@@ -319,10 +321,16 @@ class AnomalyDetector(Node):
                 f'!!! [#{t.id}] 움직이는 대상: ({t.x:+.2f}, {t.y:+.2f}), 폭 {t.width:.2f} m')
             self.publish_event('moving', t, stamp)
 
-    def check_person(self, t, cluster, stamp):
-        """다리 두 개 패턴이 person_frames 번 보이면 사람 후보로 표시한다 (표시용, 등급은 안 바꿈)."""
+    def count_legs(self, t, cluster):
+        """다리 두 개 패턴이면 센다. check_confirm 보다 먼저 불러야 'detected' 이벤트에 사람 후보가 실린다."""
         if is_leg_pair(cluster[4]):
             t.leg_frames += 1
+
+    def check_person(self, t, stamp):
+        """다리 두 개 패턴이 person_frames 번 보이면 사람 후보로 표시한다 (표시용, 등급은 안 바꿈).
+
+        확정과 같은 스캔에서 정해지면 check_confirm 이 'detected' 에 실어 보내므로 여기서는 확정 뒤만 처리한다.
+        """
         if t.confirmed and not t.person and t.leg_frames >= self.person_frames:
             t.person = True
             self.get_logger().warn(
@@ -340,11 +348,15 @@ class AnomalyDetector(Node):
         t.size = size
         if not t.confirmed and t.hits >= self.confirm[size]:
             t.confirmed = True
+            # 확정 전에 이미 다리 패턴이 충분히 보였으면 첫 알림에 사람 후보를 실어 보낸다
+            # (따로 보내면 사건 관리에서 '이미 알린 사건'이 되어 알림 문구에 빠진다)
+            t.person = t.leg_frames >= self.person_frames
             delay = (stamp - t.first_seen).nanoseconds / 1e9
             note = ' (위치추정 오류일 수도 있음)' if size == 'large' else ''
             self.get_logger().warn(
                 f'!!! [#{t.id}] {SIZE_NAMES[size]} 물체 감지: ({t.x:+.2f}, {t.y:+.2f}), '
-                f'폭 {t.width:.2f} m, 점 {t.points}개, 처음 보인 뒤 {delay:.1f}초 만에 확정{note}')
+                f'폭 {t.width:.2f} m, 점 {t.points}개, 처음 보인 뒤 {delay:.1f}초 만에 확정{note}'
+                f'{", 사람 후보" if t.person else ""}')
             self.publish_event('detected', t, stamp)
 
     # ---------- 출력 ----------
