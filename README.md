@@ -184,7 +184,7 @@ agent 는 가상머신 안에서 돌기 때문에, 맥이 로봇 패킷을 가�
 7. 순찰 + 감지 + 알림 (로봇을 지도 작성 때 출발한 자리·방향에 놓고 시작):
    ```bash
    ros2 launch security_patrol real_nav.launch.py
-   ros2 launch security_patrol detect.launch.py use_sim_time:=false route_file:=$HOME/maps_real/patrol_route_real.yaml
+   ros2 launch security_patrol detect.launch.py use_sim_time:=false relink_seconds:=30.0 route_file:=$HOME/maps_real/patrol_route_real.yaml
    ros2 run security_patrol patrol_node --ros-args -p route_file:=$HOME/maps_real/patrol_route_real.yaml
    ```
 

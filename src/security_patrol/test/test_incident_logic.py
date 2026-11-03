@@ -54,6 +54,15 @@ class IncidentBookTest(unittest.TestCase):
         self.assertEqual(self.book.on_event(event('detected', 2, x=4.0), 5.0), [])
         self.assertEqual(len(self.book.incidents), 1)
 
+    def test_real_robot_longer_relink_keeps_one_incident(self):
+        # 실제 로봇(relink_seconds 30): 회전하느라 20초 놓쳤다가 다시 잡혀도 같은 사람이다
+        b = IncidentBook(relink_sec=30.0)
+        b.on_event(event('detected', 1), 0.0)
+        b.on_event(event('moving', 1, x=0.5), 2.0)
+        b.on_event(event('cleared', 1, x=0.6), 3.0)
+        self.assertEqual(b.on_event(event('detected', 2, x=1.2, y=-0.6), 23.0), [])
+        self.assertEqual(len(b.incidents), 1)
+
     def test_moving_target_long_gone_is_new_incident(self):
         self.book.on_event(event('detected', 1), 0.0)
         self.book.on_event(event('moving', 1, x=1.0), 1.0)
