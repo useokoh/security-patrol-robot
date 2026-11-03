@@ -24,9 +24,9 @@
 - [x] 2단계: SLAM 기준 지도 작성
 - [x] 3단계: Nav2 자율주행
 - [x] 4단계: 순찰 노드
-- [ ] 5단계: 이상 감지 노드
-- [ ] 6단계: 경보 노드
-- [ ] 7단계: 시뮬레이션 통합 시험
+- [x] 5단계: 이상 감지 노드
+- [x] 6단계: 경보 노드
+- [x] 7단계: 시뮬레이션 통합 시험
 - [ ] 8단계: 실제 로봇 이식
 
 ## 실행 방법 (1단계)
@@ -152,6 +152,45 @@ ros2 topic pub --once /anomaly/ack std_msgs/msg/Int32 "{data: 1}"
 ```bash
 ros2 run security_patrol eval_run --ros-args -p use_sim_time:=true
 ```
+
+## 실행 방법 (8단계: 실제 로봇)
+
+로봇(ESP32)은 휴대폰 핫스팟에 붙어 micro-ROS agent(UDP 8888)로 데이터를 보냅니다.
+agent 는 가상머신 안에서 돌기 때문에, 맥이 로봇 패킷을 가상머신으로 넘겨 줍니다(펌웨어·VM 네트워크 변경 없음).
+
+```
+로봇 ──UDP──▶ 맥 (핫스팟 주소 = 펌웨어의 agent 주소) ──UDP──▶ VM 192.168.64.2:8888 (micro-ROS agent)
+```
+
+1. 휴대폰 핫스팟을 켭니다. ESP32 는 2.4 GHz 만 되므로 iPhone 은 `호환성 최대화`를 켭니다.
+2. 맥을 핫스팟에 연결하고 Wi-Fi 의 IPv4 를 수동으로 펌웨어의 agent 주소로 지정합니다.
+3. 맥 터미널에서 중계를 켭니다 (ROS 불필요):
+   ```bash
+   python3 tools/microros_udp_relay.py --vm 192.168.64.2
+   ```
+4. 가상머신에서 처음 한 번 micro-ROS agent 를 설치합니다: `bash tools/install_microros_agent.sh`
+5. 로봇 전원을 켜고 연결을 확인합니다:
+   ```bash
+   ros2 launch security_patrol real_bringup.launch.py rviz:=true
+   ros2 run security_patrol scan_check      # 다른 터미널: scan 약 6 Hz, odom 이 들어오는지
+   ```
+6. 지도 작성 + 순찰 지점 기록:
+   ```bash
+   ros2 launch security_patrol real_slam.launch.py
+   ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p speed:=0.1 -p turn:=0.6
+   ros2 run security_patrol route_recorder  # 순찰 지점에서 Enter
+   mkdir -p ~/maps_real && ros2 run nav2_map_server map_saver_cli -f ~/maps_real/real_area
+   ```
+7. 순찰 + 감지 + 알림 (로봇을 지도 작성 때 출발한 자리·방향에 놓고 시작):
+   ```bash
+   ros2 launch security_patrol real_nav.launch.py
+   ros2 launch security_patrol detect.launch.py use_sim_time:=false route_file:=$HOME/maps_real/patrol_route_real.yaml
+   ros2 run security_patrol patrol_node --ros-args -p route_file:=$HOME/maps_real/patrol_route_real.yaml
+   ```
+
+실제 공간 지도와 순찰 지점은 저장소 밖 `~/maps_real/` 에 둡니다.
+`robot_bridge` 는 ESP32 가 보내는 라이다 조각(`range_segment`)과 엔코더·자이로 값(`encoder_deltas_gyroz_bat_rssi`)을
+시뮬레이션과 같은 `/scan`, `/odom`, TF 로 바꿔 주므로 나머지 노드는 그대로 씁니다.
 
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).

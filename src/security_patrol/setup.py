@@ -40,6 +40,8 @@ setup(
             'alert_notifier = security_patrol.alert_notifier:main',
             'telegram_setup = security_patrol.telegram_setup:main',
             'eval_run = security_patrol.eval_run:main',
+            'robot_bridge = security_patrol.robot_bridge:main',
+            'route_recorder = security_patrol.route_recorder:main',
         ],
     },
 )

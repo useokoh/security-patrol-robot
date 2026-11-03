@@ -26,9 +26,12 @@ from security_patrol.telegram_link import (AlertLink, DEFAULT_CONFIG, TelegramCl
                                            load_config)
 
 
-def load_points():
+def default_route_file():
+    return os.path.join(get_package_share_directory('security_patrol'), 'config', 'patrol_route.yaml')
+
+
+def load_points(path):
     """순찰 지점 이름과 위치를 읽는다 ('어느 지점 근처' 표시용)."""
-    path = os.path.join(get_package_share_directory('security_patrol'), 'config', 'patrol_route.yaml')
     with open(path, encoding='utf-8') as f:
         return yaml.safe_load(f)['patrol']['checkpoints']
 
@@ -39,6 +42,8 @@ class AlertNotifier(Node):
         super().__init__('alert_notifier')
         config_file = self.declare_parameter('config_file', DEFAULT_CONFIG).value
         self.retry_seconds = self.declare_parameter('retry_seconds', 5.0).value
+        # 실제 로봇은 순찰 지점이 달라서 patrol_node 와 같은 경로 파일을 넘겨 준다
+        route_file = self.declare_parameter('route_file', default_route_file()).value
         config = load_config(config_file)
         if config is None:
             self.get_logger().warn(
@@ -47,7 +52,7 @@ class AlertNotifier(Node):
             return
 
         client = TelegramClient(config['token'])
-        self.link = AlertLink(client, config['chat_id'], int(time.time()), load_points())
+        self.link = AlertLink(client, config['chat_id'], int(time.time()), load_points(route_file))
         self.wake = threading.Event()
         self.ack_pub = self.create_publisher(Int32, 'anomaly/ack', 10)
         self.create_subscription(String, 'anomaly/alerts', self.on_alert, 10)
