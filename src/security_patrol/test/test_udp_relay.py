@@ -70,6 +70,30 @@ class RelayTest(unittest.TestCase):
         relay.close()
         robot.close()
 
+    def test_agent_down_with_steady_robot_packets_never_hangs(self):
+        # 2026-11-03 맥 실행: agent 가 꺼진 동안 로봇 패킷이 계속 오자, send 가 '연결 거부' 오류를 먼저 가져가고
+        # select 가 읽을 수 있다고 했던 VM 소켓의 recv 가 영원히 멈췄다. 다른 스레드에서 돌려 멈추지 않는지 본다.
+        import threading
+        dead = udp()
+        dead_addr = dead.getsockname()
+        dead.close()
+        relay = Relay(dead_addr, 0, log=self.logs.append)
+        robot = udp()
+        target = ('127.0.0.1', relay.listen.getsockname()[1])
+        done = threading.Event()
+
+        def run():
+            for _ in range(60):
+                robot.sendto(b'p', target)
+                relay.step(timeout=0.05)
+            done.set()
+
+        threading.Thread(target=run, daemon=True).start()
+        self.assertTrue(done.wait(5.0), 'relay.step 이 멈춤')
+        self.assertGreater(relay.stats['to_vm'], 0)
+        relay.close()
+        robot.close()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,6 +1,7 @@
 # Nav2 (Humble) 설정 - 8단계 실제 ESP32 로봇용
-# 시뮬레이션용 nav2_params.yaml 과 같고, 다른 점은 세 가지뿐이다:
-#   use_sim_time False, AMCL 이동 모델 Differential(+ odom 오차 기본값 0.2), 시작 위치 = 지도 원점
+# 시뮬레이션용 nav2_params.yaml 을 바탕으로, 실제 로봇에서 바꾼 값에는 '실제 로봇' 주석을 달았다:
+#   use_sim_time False, AMCL 이동 모델 Differential(+ odom 오차 기본값 0.2), 시작 위치 = 지도 원점,
+#   도착 방향 무시, 진행 감시 완화, 회전 속도 상한 1.8, 장애물 여유 0.20 m (2026-11-03 실제 방에서 조정)
 # nav2_bringup 기본 nav2_params.yaml 에서 이 로봇에 맞게 바꾼 값에 주석을 달았다.
 #   - 로봇: 약 0.23 x 0.19 m, 최고 속도 낮음, 제자리 회전 가능(명령 대비 약 80%)
 #   - 라이다: 360°, 0.15~8 m, 5~6 Hz
@@ -90,14 +91,15 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.3     # 느린 로봇이라 기준을 낮춤 (기본 0.5)
-      movement_time_allowance: 15.0     # 제자리 회전 시간을 고려해 여유 (기본 10.0)
+      # 실제 로봇: 제자리 회전은 이동 거리로 치지 않는데 회전이 명령의 약 25% 라 오래 걸린다
+      required_movement_radius: 0.15    # (시뮬레이션 0.3, 기본 0.5)
+      movement_time_allowance: 30.0     # (시뮬레이션 15.0, 기본 10.0)
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.15           # (기본 0.25)
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 3.14          # 실제 로봇: 라이다가 360° 라 도착 방향은 상관없음 (도착 후 회전 생략)
 
     # Regulated Pure Pursuit: 경로를 따라가다 방향 차이가 크면 제자리 회전 → 스키드 스티어에 단순하고 안정적
     FollowPath:
@@ -107,7 +109,7 @@ controller_server:
       min_lookahead_dist: 0.25
       max_lookahead_dist: 0.7
       lookahead_time: 1.5
-      rotate_to_heading_angular_vel: 0.8
+      rotate_to_heading_angular_vel: 1.8   # 실제 로봇: 4륜이 미끄러져 명령의 약 25% 만 돈다 (시뮬레이션 0.8)
       transform_tolerance: 0.2
       use_velocity_scaled_lookahead_dist: false
       min_approach_linear_velocity: 0.05
@@ -155,8 +157,8 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.30          # 작은 로봇 + 좁은 통로 (기본 0.55)
+        cost_scaling_factor: 8.0          # 실제 로봇: 약 3 m 작은 방이라 여유를 줄임 (시뮬레이션 5.0)
+        inflation_radius: 0.20            # (시뮬레이션 0.30, 기본 0.55)
       always_send_full_costmap: True
 
 global_costmap:
@@ -190,8 +192,8 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.30
+        cost_scaling_factor: 8.0          # 실제 로봇: 약 3 m 작은 방이라 여유를 줄임 (시뮬레이션 5.0)
+        inflation_radius: 0.20            # (시뮬레이션 0.30, 기본 0.55)
       always_send_full_costmap: True
 
 map_server:
@@ -247,7 +249,7 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
+    max_rotational_vel: 1.8             # 실제 로봇 (시뮬레이션 0.8)
     min_rotational_vel: 0.3
     rotational_acc_lim: 2.0
 
@@ -272,8 +274,8 @@ velocity_smoother:
     smoothing_frequency: 10.0           # 컨트롤러 주기에 맞춤 (기본 20.0)
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.2, 0.0, 1.0]       # 기본 [0.26, 0.0, 1.0]
-    min_velocity: [-0.2, 0.0, -1.0]
+    max_velocity: [0.2, 0.0, 1.8]       # 실제 로봇: 회전 상한을 올림 (시뮬레이션 1.0, 기본 [0.26, 0.0, 1.0])
+    min_velocity: [-0.2, 0.0, -1.8]
     max_accel: [1.0, 0.0, 2.0]
     max_decel: [-1.0, 0.0, -2.0]
     odom_topic: "odom"

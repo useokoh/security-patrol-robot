@@ -37,6 +37,9 @@ class Relay:
         self.listen = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listen.bind(('0.0.0.0', listen_port))
+        # 받을 것이 없으면 기다리지 않고 넘어간다. select 가 '읽을 수 있음' 이라고 한 뒤에도
+        # VM 의 '연결 거부' 오류를 send 가 먼저 가져가 버리면 recv 가 영원히 멈출 수 있기 때문이다
+        self.listen.setblocking(False)
         self.upstream = None
         self.robot = None
         self.stats = {'to_vm': 0, 'to_robot': 0}
@@ -46,6 +49,7 @@ class Relay:
         if self.upstream is not None:
             self.upstream.close()
         self.upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.upstream.setblocking(False)
         self.upstream.connect(self.vm_addr)
 
     def step(self, timeout=1.0):
@@ -54,7 +58,13 @@ class Relay:
         readable, _, _ = select.select(sockets, [], [], timeout)
         for sock in readable:
             if sock is self.listen:
-                data, addr = self.listen.recvfrom(65535)
+                try:
+                    data, addr = self.listen.recvfrom(65535)
+                except (BlockingIOError, InterruptedError):
+                    continue
+                except OSError as e:          # 로봇 쪽 ICMP 오류 등. 다음 패킷을 계속 받는다
+                    self.log(f'로봇 패킷 받기 실패: {type(e).__name__}')
+                    continue
                 if addr != self.robot:
                     self.log(f'로봇 연결: {addr[0]}:{addr[1]}' + (' (재연결)' if self.robot else ''))
                     self.robot = addr
@@ -64,15 +74,20 @@ class Relay:
                     self.stats['to_vm'] += 1
                 except OSError as e:          # VM 이 꺼져 있으면 '연결 거부' 가 올 수 있다
                     self.log(f'VM 으로 보내기 실패: {type(e).__name__}')
-            else:
+            elif sock is self.upstream:       # 로봇이 바뀌어 닫은 이전 소켓은 건너뛴다
                 try:
                     data = self.upstream.recv(65535)
+                except (BlockingIOError, InterruptedError):
+                    continue
                 except OSError as e:          # agent 가 아직 안 켜졌으면 ICMP 거부가 여기서 나온다
                     self.log(f'VM agent 응답 없음: {type(e).__name__} (agent 를 켰는지 확인)')
                     continue
                 if self.robot:
-                    self.listen.sendto(data, self.robot)
-                    self.stats['to_robot'] += 1
+                    try:
+                        self.listen.sendto(data, self.robot)
+                        self.stats['to_robot'] += 1
+                    except OSError as e:      # 로봇이 잠깐 핫스팟에서 빠진 경우 등
+                        self.log(f'로봇으로 보내기 실패: {type(e).__name__}')
 
     def close(self):
         self.listen.close()

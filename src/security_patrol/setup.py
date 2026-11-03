@@ -42,6 +42,7 @@ setup(
             'eval_run = security_patrol.eval_run:main',
             'robot_bridge = security_patrol.robot_bridge:main',
             'route_recorder = security_patrol.route_recorder:main',
+            'wheel_check = security_patrol.wheel_check:main',
         ],
     },
 )
