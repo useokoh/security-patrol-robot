@@ -32,6 +32,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from security_patrol.motion_judge import MotionJudge
+from security_patrol.tracking import associate
 
 SIZE_NAMES = {'small': '소형', 'medium': '중형', 'large': '대형'}
 SIZE_LABELS = {'small': 'S', 'medium': 'M', 'large': 'L'}  # RViz 글자는 한글이 깨질 수 있어 영문
@@ -80,6 +81,7 @@ class AnomalyDetector(Node):
         }
         # 추적
         self.match_dist = p('match_distance', 0.40).value         # 다음 스캔에서 이 거리 안이면 같은 물체 [m]
+        self.rematch_dist = p('moving_rematch_distance', 1.0).value  # 움직이는 대상은 이 거리 안이면 이어 붙임 [m]
         self.max_misses = p('max_misses', 3).value                # 확정된 물체가 이만큼 연속으로 안 보이면 '사라짐'
         # 이동 판정 (motion_judge.py)
         self.motion_args = {
@@ -259,25 +261,28 @@ class AnomalyDetector(Node):
 
     def update_tracks(self, clusters, stamp):
         """이번 스캔의 물체를 이전 물체와 짝지어 연속으로 보인 횟수를 센다."""
-        unmatched = list(self.tracks)
-        for c in clusters:
-            best = min(unmatched, key=lambda t: math.hypot(t.x - c[0], t.y - c[1]), default=None)
-            if best is not None and math.hypot(best.x - c[0], best.y - c[1]) <= self.match_dist:
-                unmatched.remove(best)
+        pairs, new_clusters, unmatched = associate(self.tracks, clusters, self.match_dist, self.rematch_dist)
+        for best, c, rematched in pairs:
+            if rematched:
+                # 크게 옮겨 보인 움직이는 대상: 평균을 내면 엉뚱한 중간 위치가 되므로 새 위치로 바로 옮긴다
+                self.get_logger().info(
+                    f'[#{best.id}] 움직이는 대상 다시 잡음: {math.hypot(best.x - c[0], best.y - c[1]):.2f} m 옮겨 보임')
+                best.x, best.y = c[0], c[1]
+            else:
                 best.x = 0.5 * best.x + 0.5 * c[0]
                 best.y = 0.5 * best.y + 0.5 * c[1]
-                best.width = max(best.width, c[2])   # 보이는 면만 재므로 가장 넓게 보인 값을 사용
-                best.points = c[3]
-                best.hits += 1
-                best.misses = 0
-                self.check_confirm(best, stamp)
-                self.check_motion(best, c, stamp)
-            else:
-                track = Track(self.next_id, c, stamp, MotionJudge(**self.motion_args))
-                self.next_id += 1
-                self.tracks.append(track)
-                self.check_confirm(track, stamp)
-                self.check_motion(track, c, stamp)
+            best.width = max(best.width, c[2])   # 보이는 면만 재므로 가장 넓게 보인 값을 사용
+            best.points = c[3]
+            best.hits += 1
+            best.misses = 0
+            self.check_confirm(best, stamp)
+            self.check_motion(best, c, stamp)
+        for c in new_clusters:
+            track = Track(self.next_id, c, stamp, MotionJudge(**self.motion_args))
+            self.next_id += 1
+            self.tracks.append(track)
+            self.check_confirm(track, stamp)
+            self.check_motion(track, c, stamp)
 
         for t in unmatched:
             t.misses += 1
