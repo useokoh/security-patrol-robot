@@ -37,6 +37,8 @@ setup(
             'anomaly_detector = security_patrol.anomaly_detector:main',
             'incident_manager = security_patrol.incident_manager:main',
             'intruder_walker = security_patrol.intruder_walker:main',
+            'alert_notifier = security_patrol.alert_notifier:main',
+            'telegram_setup = security_patrol.telegram_setup:main',
         ],
     },
 )

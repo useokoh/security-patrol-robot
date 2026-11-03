@@ -124,7 +124,17 @@ ros2 run security_patrol intruder_walker
 
 경보는 2단계입니다: 긴급(움직이는 대상), 주의(멈춰 있는 새 물체). 폭 15 cm 미만의 작은 물체는
 순찰 한 바퀴마다 묶어서 알리고, 확인하지 않은 사건은 5분마다 다시 알립니다.
-알림은 `/anomaly/alerts` 로 나오고, 확인은 아래처럼 보냅니다 (6단계에서 휴대폰 버튼으로 연결).
+알림은 `/anomaly/alerts` 로 나오고, `alert_notifier` 가 이를 텔레그램으로 보냅니다.
+휴대폰에서 확인 버튼을 누르면 `/anomaly/ack` 로 전달되어 재알림이 멈춥니다.
+
+처음 한 번만 설정합니다. 텔레그램 `@BotFather` 에서 `/newbot` 으로 봇을 만들어 토큰을 받은 뒤 실행합니다.
+토큰은 저장소 밖 `~/.config/security_patrol/telegram.json` 에 저장되며, 저장소에 넣지 않습니다.
+
+```bash
+ros2 run security_patrol telegram_setup
+```
+
+설정 파일이 없으면 경고만 내고 전송 없이 실행됩니다. 이때 확인은 직접 보낼 수 있습니다:
 
 ```bash
 ros2 topic pub --once /anomaly/ack std_msgs/msg/Int32 "{data: 1}"
