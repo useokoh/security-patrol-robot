@@ -8,6 +8,7 @@
 
 import base64
 import math
+import os
 
 
 def yaw_from_quaternion(x, y, z, w):
@@ -165,8 +166,57 @@ def guard_speed(linear, points, gap=0.15, side_margin=0.04):
     return linear, None
 
 
+# ---------- 코스 (3단계) ----------
+
+def load_course(path):
+    """순찰 경로 파일(patrol_route.yaml 형식) → 앱용 코스. 형식이 아니면 None.
+
+    patrol_node 의 load_route 와 같은 파일을 읽지만, 앱에는 이름·좌표만 있으면 된다.
+    """
+    import yaml   # 맥(시험용)에는 없을 수 있어 여기서 읽는다
+
+    try:
+        with open(path, encoding='utf-8') as f:
+            cfg = yaml.safe_load(f)
+        patrol = cfg['patrol']
+        points = [{'name': str(p['name']), 'x': round(float(p['x']), 3), 'y': round(float(p['y']), 3)}
+                  for p in patrol['checkpoints']]
+    except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError):
+        return None
+    if not points:
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return {'name': str(patrol.get('name') or stem.replace('_', ' ')),
+            'dwell': float(patrol.get('dwell_time', 2.0)), 'points': points}
+
+
+def list_courses(dirs):
+    """폴더들에서 코스 파일을 찾는다. ({id: 경로}, [앱에 보낼 코스...]) 를 돌려준다.
+
+    id 는 파일 이름(확장자 뺀 것)이고, 이름이 겹치면 뒤에 번호를 붙인다. 앱에는 경로를 보내지 않는다.
+    """
+    paths, courses = {}, []
+    for d in dirs:
+        d = os.path.expanduser(d)
+        if not os.path.isdir(d):
+            continue
+        for fname in sorted(os.listdir(d)):
+            if not fname.endswith(('.yaml', '.yml')):
+                continue
+            path = os.path.join(d, fname)
+            course = load_course(path)
+            if course is None:
+                continue
+            cid, n = os.path.splitext(fname)[0], 2
+            while cid in paths:
+                cid, n = f'{os.path.splitext(fname)[0]}_{n}', n + 1
+            paths[cid] = path
+            courses.append(dict(course, id=cid))
+    return paths, courses
+
+
 def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, now,
-                manual=None, patrol_running=None):
+                manual=None, patrol_running=None, patrol_app=None):
     """앱에 주기적으로 보내는 상태 한 덩어리."""
     robot = None
     if robot_pose is not None:
@@ -175,4 +225,4 @@ def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, n
     return {'type': 'state', 't': round(now, 2), 'robot': robot, 'localized': localized,
             'scan': points, 'battery': None if battery is None else round(battery, 2),
             'rssi': rssi, 'patrol': patrol, 'patrol_running': patrol_running,
-            'objects': objects, 'manual': manual}
+            'objects': objects, 'manual': manual, 'patrol_app': patrol_app}

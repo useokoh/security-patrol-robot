@@ -3,11 +3,13 @@
 1단계: 레이더 화면 - 지도, 로봇 위치, 라이다 점, 감지 물체, 순찰 상태, 배터리·Wi-Fi
 2단계: 수동 주행 - 조이스틱 → cmd_vel. 손을 떼거나, 명령이 0.5초 끊기거나, 연결이 끊기면 정지.
        앞뒤가 막히면 전후진만 막고, 순찰이 켜져 있으면 수동 주행을 받지 않는다.
-3단계부터: 코스 선택·자동 순찰
+3단계: 코스 선택·자동 순찰 - 코스 파일 목록을 앱에 보내고, 앱이 고른 코스로 patrol_node 를 켜고 끈다.
 
-  # 시뮬레이션
+  # 보통은 app.launch.py 로 한 번에 켠다 (시뮬레이션/실제 로봇 + Nav2 + 감지 + 앱 서버)
+  ros2 launch security_patrol app.launch.py
+  # 앱 서버만 따로 (시뮬레이션)
   ros2 run security_patrol app_server --ros-args -p use_sim_time:=true
-  # 실제 로봇 (4륜이 미끄러져 회전이 명령의 약 25% 라 회전 상한을 올린다)
+  # 앱 서버만 따로 (실제 로봇: 4륜이 미끄러져 회전이 명령의 약 25% 라 회전 상한을 올린다)
   ros2 run security_patrol app_server --ros-args -p max_angular:=1.8
   # 브라우저: 가상머신 안 http://localhost:8080, 맥 http://192.168.64.2:8080
 """
@@ -18,7 +20,7 @@ import threading
 import time
 
 import rclpy
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid
 from rclpy.clock import Clock, ClockType
@@ -31,7 +33,8 @@ from std_msgs.msg import Float32, Int32, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from security_patrol.app_logic import (ManualDrive, ObjectBoard, build_state, encode_map, guard_speed,
-                                       scan_to_points, yaw_from_quaternion)
+                                       list_courses, scan_to_points, yaw_from_quaternion)
+from security_patrol.patrol_runner import PatrolRunner
 from security_patrol.web_server import WebServer
 
 
@@ -55,6 +58,17 @@ class AppServer(Node):
         self.drive_lock = threading.Lock()                       # 앱 명령(웹 서버 스레드) ↔ 발행(ROS 스레드)
         self.blocked = None
         self.patrol_running = False
+
+        # 자동 순찰: 코스 파일을 찾을 폴더 (쉼표로 여러 개). 기본은 시뮬레이션이면 패키지 config,
+        # 실제 로봇이면 저장소 밖 ~/maps_real (route_recorder 가 저장하는 곳)
+        self.sim = bool(self.get_parameter('use_sim_time').value)
+        share = get_package_share_directory('security_patrol')
+        default_dirs = os.path.join(share, 'config') if self.sim else '~/maps_real'
+        self.course_dirs = [d.strip() for d in str(p('course_dirs', default_dirs).value).split(',') if d.strip()]
+        self.course_paths, self.courses = {}, []
+        self.runner = PatrolRunner(os.path.join(get_package_prefix('security_patrol'), 'lib', 'security_patrol',
+                                                'patrol_node'), log=self.get_logger().info)
+        self.refresh_courses()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -115,13 +129,59 @@ class AppServer(Node):
 
     def on_app_connect(self, cid):
         self.web.send_to(cid, {'type': 'hello', 'id': cid})     # 앱이 자기가 조종 중인지 알 수 있게
+        self.web.send_to(cid, {'type': 'courses', 'courses': self.courses})
         if self.map_msg is not None:
             self.web.send_to(cid, self.map_msg)
+
+    def refresh_courses(self):
+        self.course_paths, self.courses = list_courses(self.course_dirs)
+        self.get_logger().info(f'순찰 코스 {len(self.courses)}개: {", ".join(c["id"] for c in self.courses) or "없음"} '
+                               f'({", ".join(self.course_dirs)})')
+
+    def notice(self, cid, text, level='warn'):
+        self.web.send_to(cid, {'type': 'notice', 'level': level, 'text': text})
+
+    def on_patrol_start(self, cid, msg):
+        course = msg.get('course')
+        try:
+            laps = max(0, min(99, int(msg.get('laps', 0))))
+        except (TypeError, ValueError):
+            laps = 0
+        if course not in self.course_paths:
+            return self.notice(cid, '없는 코스입니다. 목록을 새로 고쳐 주세요')
+        if self.count_publishers('patrol/status') > 0 and not self.runner.running():
+            return self.notice(cid, '터미널에서 켠 순찰이 이미 돌고 있습니다. 그 터미널에서 Ctrl+C 로 멈춘 뒤 시작하세요')
+        with self.drive_lock:
+            if self.drive.owner is not None:
+                self.drive.stop('patrol')
+        result = self.runner.start(course, self.course_paths[course], laps, self.sim)
+        if result == 'running':
+            self.notice(cid, '이미 순찰 중입니다')
+        elif result == 'failed':
+            self.notice(cid, '순찰을 켜지 못했습니다. 앱 서버 터미널의 오류를 확인하세요', 'bad')
+        else:
+            self.patrol = None                  # 지난 순찰의 진행 정보를 지운다
+            self.patrol_running = True
+            self.web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 시작합니다'})
+
+    def on_patrol_stop(self, cid):
+        if self.runner.running():
+            self.runner.stop()
+            self.web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 멈추는 중입니다 (이동 취소)'})
+        elif self.count_publishers('patrol/status') > 0:
+            self.notice(cid, '터미널에서 켠 순찰입니다. 그 터미널에서 Ctrl+C 로 멈추세요')
 
     def on_app_message(self, cid, msg):
         """웹 서버 스레드에서 불린다. 여기서는 값만 바꾸고, 실제 발행은 drive_tick 이 한다."""
         kind = msg.get('type')
         log = self.get_logger()
+        if kind == 'patrol_start':
+            return self.on_patrol_start(cid, msg)
+        if kind == 'patrol_stop':
+            return self.on_patrol_stop(cid)
+        if kind == 'courses':
+            self.refresh_courses()
+            return self.web.send_to(cid, {'type': 'courses', 'courses': self.courses})
         with self.drive_lock:
             before = self.drive.owner
             if kind == 'disconnected':
@@ -198,7 +258,8 @@ class AppServer(Node):
 
     def tick(self):
         # 순찰 노드가 살아 있는지: patrol/status 를 내는 쪽(patrol_node)이 있으면 순찰 중
-        self.patrol_running = self.count_publishers('patrol/status') > 0
+        external = self.count_publishers('patrol/status') > 0 and not self.runner.running()
+        self.patrol_running = self.runner.running() or self.count_publishers('patrol/status') > 0
         if self.web.client_count() == 0:
             return
         points = self.scan_points(self.scan_step)
@@ -210,9 +271,12 @@ class AppServer(Node):
         with self.drive_lock:
             manual = self.drive.snapshot()
         manual['blocked'] = self.blocked
+        patrol_app = self.runner.snapshot()
+        patrol_app['owner'] = 'app' if patrol_app['running'] else 'external' if external else None
         self.web.broadcast(build_state(robot, points, self.battery, self.rssi, self.patrol,
                                        self.board.snapshot(now), localized, now,
-                                       manual=manual, patrol_running=self.patrol_running))
+                                       manual=manual, patrol_running=self.patrol_running,
+                                       patrol_app=patrol_app))
 
 
 def main():
@@ -224,6 +288,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        node.runner.stop(wait=True)          # 앱이 켠 순찰도 함께 끈다 (이동 취소)
         node.stop_robot()
         node.web.stop()
         node.destroy_node()

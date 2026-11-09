@@ -1,5 +1,21 @@
 # 관제 앱
 
+## 2026-11-10 3단계: 코스 선택·자동 순찰 + 한 번에 켜기
+- 결정과 이유:
+  - 사용자 선택: 추천안(코스는 기존 파일 고르기, 바퀴 수 계속/1/3, 감지는 따로)에 "이 앱만 켜면 다 되도록" 추가 → `app.launch.py` 하나로 로봇·Nav2·감지·앱 서버를 켜고 나머지는 앱에서.
+  - 순찰 코드는 그대로 두고 앱 서버가 `patrol_node` 를 하위 프로세스로 켜고 SIGINT(Ctrl+C 와 같음)로 끈다. 안 끝나면 SIGTERM → SIGKILL.
+  - `ros2 run` 이 아니라 실행 파일(lib/security_patrol/patrol_node)을 직접 켠다. ros2 run 은 신호를 자식에게 넘기지 않아 앱의 정지 신호가 안 닿기 때문.
+  - 코스 폴더: 시뮬레이션은 패키지 config, 실제 로봇은 ~/maps_real. 앱에는 파일 경로 대신 id(파일 이름)만 보냄.
+  - 터미널에서 켠 순찰(patrol/status 발행자는 있는데 앱이 켠 게 아님)은 앱에서 멈추지 않고 안내만 한다.
+  - 순찰을 시작하면 수동 주행을 먼저 멈춘다. 수동 주행 탭에 '순찰 멈추고 수동 주행' 버튼.
+  - 앱 서버를 끄면 앱이 켠 순찰도 함께 끈다(이동 취소).
+- 바뀐 파일: `patrol_runner.py`(새), `app_logic.py`(load_course, list_courses), `app_server.py`, `launch/app.launch.py`(새), `config/patrol_route.yaml`(name 추가), `web/*`, `tools/app_preview.py`(가짜 코스·순찰), `test/test_patrol_runner.py`(새), `test/test_app_logic.py`, `README.md`.
+- 확인 결과:
+  - 단위 시험 141개 통과(pyyaml 있는 환경), 맥 기본 파이썬에서는 코스 시험 5개 건너뜀.
+  - 가짜 ROS + 가짜 patrol_node 로 app_server: 코스 목록, 없는 코스 안내, 3바퀴 시작(수동 주행 정지), 순찰 중 조이스틱 거절, 정지(SIGINT, 종료 코드 0), 터미널 순찰은 안 건드림, 종료 때 순찰도 끔.
+  - 미리보기(휴대폰 크기): 코스 목록·지도 경로, 1바퀴 시작 → 진행 막대·현재 지점 깜박임, '순찰 멈추고 수동 주행' → 잠금 풀림.
+  - 확인 못 한 것: VM 에서 app.launch.py 실행, 실제 patrol_node 를 앱에서 켜고 끄기.
+
 ## 2026-11-10 조작감·속도·로봇 모양 개선 (사용자 피드백)
 - 확인 결과(직전): VM 에서 순찰 Ctrl+C 후 잠금 풀림, 벽 앞 정지 모두 사용자 확인.
 - 피드백: 조이스틱이 너무 가볍다, 속도가 느리게/보통 두 개뿐이라 싫다, 로봇이 못생겼다.

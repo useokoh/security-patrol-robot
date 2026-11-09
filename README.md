@@ -195,7 +195,7 @@ agent 는 가상머신 안에서 돌기 때문에, 맥이 로봇 패킷을 가�
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).
 
-## 관제 앱 (만드는 중: 1단계 레이더 화면, 2단계 수동 주행)
+## 관제 앱 (레이더 화면, 수동 주행, 코스 선택·자동 순찰)
 
 휴대폰·노트북 브라우저로 로봇을 보는 웹 앱입니다. 설치가 필요 없고, 가상머신의 `app_server` 노드가 화면 파일과 실시간 데이터를 함께 보냅니다.
 
@@ -208,20 +208,25 @@ RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 �
   - 차체 앞뒤 15 cm 안에 물체가 보이면 그쪽으로는 못 가고(빨간 구역 표시), 회전과 반대 방향은 됩니다.
   - 순찰(patrol_node)이 켜져 있으면 수동 주행을 받지 않습니다.
   - 최대 속도는 서버에서 정합니다: `max_linear`(기본 0.15 m/s), `max_angular`(기본 1.0 rad/s), `guard_gap`(기본 0.15 m, 0 = 끔).
-- 코스 선택·자동 순찰은 다음 단계에서 추가합니다.
+- 자동 주행: 코스를 고르면 지도에 지점 번호와 경로가 보이고, 바퀴 수(계속 반복 / 1 / 3바퀴)를 골라 `순찰 시작`.
+  - 진행 상황(몇 바퀴째, 몇 번째 지점, 막대)과 지금 가는 지점(주황색)이 보입니다. `순찰 정지`는 Ctrl+C 처럼 이동을 취소합니다.
+  - 앱 서버가 `patrol_node` 를 대신 켜고 끕니다. 코스 파일은 시뮬레이션이면 패키지 `config/`, 실제 로봇이면 `~/maps_real/`
+    에서 찾습니다(`course_dirs` 파라미터로 바꿀 수 있음). 터미널에서 켠 순찰은 앱에서 멈추지 않고 그대로 둡니다.
+
+명령 하나로 로봇·Nav2·이상 감지·앱 서버를 모두 켭니다. 그다음은 앱에서 합니다.
 
 ```bash
-# 터미널 1: 시뮬레이션 + Nav2 (또는 실제 로봇이면 real_nav.launch.py)
-ros2 launch security_patrol nav.launch.py
-# 터미널 2: 앱 서버 (시뮬레이션)
-ros2 run security_patrol app_server --ros-args -p use_sim_time:=true
-# 실제 로봇: 4륜이 미끄러져 회전이 명령의 약 25% 라 회전 상한을 올린다
-ros2 run security_patrol app_server --ros-args -p max_angular:=1.8
+# 시뮬레이션
+ros2 launch security_patrol app.launch.py
+# 실제 로봇 (맥에서 tools/microros_udp_relay.py 를 먼저 켬, 회전 상한 1.8 등 실제 로봇 설정이 자동으로 들어감)
+ros2 launch security_patrol app.launch.py robot:=real
+# 선택: RViz 도 보기, 이상 감지 끄기
+ros2 launch security_patrol app.launch.py rviz:=true detect:=false
 ```
 
 맥 브라우저에서 `http://192.168.64.2:8080` (가상머신 주소) 을 엽니다.
 ROS 없이 화면만 보려면 맥에서 `python3 tools/app_preview.py` 를 실행하고 `http://localhost:8765` 를 엽니다
-(가짜 방·로봇·사람, 조이스틱으로 가짜 로봇 운전). `--patrol` 을 붙이면 로봇이 혼자 순찰하고 수동 주행이 잠깁니다.
+(가짜 방·로봇·사람, 조이스틱 운전, 가짜 코스 순찰). `--patrol` 을 붙이면 '터미널에서 켠 순찰'을 흉내 냅니다.
 
 ## 패키지 구조
 
@@ -249,7 +254,9 @@ src/security_patrol/
 ├── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
 ├── security_patrol/patrol_node.py  # 반복 순찰 노드
 ├── security_patrol/anomaly_detector.py  # 지도 비교 이상 감지 노드
+├── launch/app.launch.py            # 관제 앱 한 번에 켜기 (로봇 + Nav2 + 감지 + 앱 서버)
 ├── security_patrol/app_server.py  # 관제 앱 서버 노드 (ROS 데이터 → 브라우저)
+├── security_patrol/patrol_runner.py  # 앱에서 patrol_node 켜고 끄기
 ├── security_patrol/web_server.py  # 정적 파일 + WebSocket 서버 (표준 라이브러리만)
 └── web/                           # 관제 앱 화면 (index.html, app.js, style.css)
 ```

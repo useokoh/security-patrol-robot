@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """맥에서 앱 화면 미리보기 (ROS·가상머신 없이). 가짜 방·로봇·라이다·사람을 만들어 앱 서버와 같은 데이터를 보낸다.
 
-  python3 tools/app_preview.py            # 브라우저에서 http://localhost:8765 → 조이스틱으로 가짜 로봇 운전
-  python3 tools/app_preview.py --patrol   # 로봇이 혼자 순찰 (수동 주행이 잠기는지 보기)
+  python3 tools/app_preview.py            # 브라우저에서 http://localhost:8765 → 조이스틱 운전, 코스 골라 순찰
+  python3 tools/app_preview.py --patrol   # '터미널에서 켠 순찰' 흉내 (앱에서 멈출 수 없고 수동 주행이 잠기는지 보기)
   python3 tools/app_preview.py --port 9000
 
 화면을 고칠 때 가상머신을 켜지 않고 바로 확인하는 용도다. 수동 주행은 실제 앱 서버와 같은 안전 규칙
@@ -82,40 +82,118 @@ def fake_scan(rx, ry, ryaw, people, step):
     return scan_to_points(ranges, -math.pi, 2 * math.pi / 720, 0.15, 8.0, step=step)
 
 
+# 가짜 코스 (가짜 방 안, 벽·상자를 피해서 잡음)
+COURSES = [
+    {'id': 'preview_loop', 'name': '미리보기 한 바퀴', 'dwell': 2.0,
+     'points': [{'name': '출발점', 'x': -2.0, 'y': 0.3}, {'name': '남서쪽', 'x': -2.2, 'y': -1.3},
+                {'name': '가운데', 'x': -0.3, 'y': -0.3}, {'name': '남동쪽', 'x': 2.2, 'y': -1.2},
+                {'name': '북동쪽', 'x': 2.3, 'y': 1.4}, {'name': '북쪽', 'x': 0.0, 'y': 1.4}]},
+    {'id': 'preview_short', 'name': '가운데 왕복', 'dwell': 3.0,
+     'points': [{'name': '서쪽', 'x': -1.8, 'y': 0.6}, {'name': '동쪽', 'x': 0.4, 'y': 0.0}]},
+]
+
+
+class FakePatrol:
+    """patrol_node 흉내: 지점으로 돌고 가서 dwell 초 멈추고, 정한 바퀴를 돌면 끝난다."""
+
+    def __init__(self, course, laps, owner):
+        self.course, self.laps, self.owner = course, laps, owner
+        self.lap, self.index, self.state, self.until = 1, 0, 'moving', 0.0
+        self.stop_at = None
+
+    def status(self):
+        p = self.course['points'][self.index]
+        return {'state': self.state, 'lap': self.lap, 'index': self.index, 'name': p['name'], 'x': p['x'], 'y': p['y']}
+
+    def step(self, pose, t, dt):
+        """새 위치와 끝났는지(None / 'done') 를 돌려준다."""
+        x, y, yaw = pose
+        if self.stop_at is not None:
+            return pose, ('stopped' if t >= self.stop_at else None)
+        p = self.course['points'][self.index]
+        if self.state == 'watching':
+            if t < self.until:
+                return pose, None
+            self.index += 1
+            if self.index == len(self.course['points']):
+                self.index = 0
+                self.lap += 1
+                if self.laps and self.lap > self.laps:
+                    return pose, 'done'
+            self.state = 'moving'
+            return pose, None
+        dx, dy = p['x'] - x, p['y'] - y
+        dist = math.hypot(dx, dy)
+        if dist < 0.06:
+            self.state, self.until = 'watching', t + self.course['dwell']
+            return pose, None
+        err = math.atan2(math.sin(math.atan2(dy, dx) - yaw), math.cos(math.atan2(dy, dx) - yaw))
+        w = max(-1.5, min(1.5, 3.0 * err))
+        v = 0.0 if abs(err) > 0.4 else min(0.3, dist)
+        yaw += w * dt
+        return (x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt, yaw), None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, default=8765)
-    ap.add_argument('--patrol', action='store_true', help='로봇이 혼자 순찰 (수동 주행 잠김)')
+    ap.add_argument('--patrol', action='store_true', help="'터미널에서 켠 순찰' 흉내 (앱에서 못 멈춤)")
     args = ap.parse_args()
     map_msg = make_map()
     drive, lock = ManualDrive(max_linear=0.3, max_angular=1.2), threading.Lock()
+    sim = {'patrol': FakePatrol(COURSES[0], 0, 'external') if args.patrol else None, 'last': None, 'status': None}
+
+    def notice(cid, text, level='warn'):
+        web.send_to(cid, {'type': 'notice', 'level': level, 'text': text})
 
     def on_message(cid, msg):                       # 웹 서버 스레드
         kind = msg.get('type')
         with lock:
+            patrol = sim['patrol']
             if kind == 'disconnected':
                 drive.disconnect(cid)
             elif kind == 'stop':
                 drive.stop()
-            elif kind == 'drive' and not args.patrol:
+            elif kind == 'drive' and patrol is None:
                 drive.command(cid, msg.get('lin'), msg.get('ang'), time.monotonic())
-        if kind != 'drive':
+            elif kind == 'patrol_start':
+                course = next((c for c in COURSES if c['id'] == msg.get('course')), None)
+                if patrol is not None:
+                    notice(cid, '이미 순찰 중입니다')
+                elif course is None:
+                    notice(cid, '없는 코스입니다')
+                else:
+                    drive.stop('patrol')
+                    sim['patrol'], sim['status'] = FakePatrol(course, int(msg.get('laps', 0)), 'app'), None
+                    web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 시작합니다'})
+            elif kind == 'patrol_stop':
+                if patrol is None:
+                    pass
+                elif patrol.owner != 'app':
+                    notice(cid, '터미널에서 켠 순찰입니다. 그 터미널에서 Ctrl+C 로 멈추세요')
+                elif patrol.stop_at is None:
+                    patrol.stop_at = time.time() - t0 + 1.5          # 이동 취소에 걸리는 시간 흉내
+                    web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 멈추는 중입니다 (이동 취소)'})
+            elif kind == 'courses':
+                web.send_to(cid, {'type': 'courses', 'courses': COURSES})
+        if kind not in ('drive',):
             print(f'앱 #{cid} → {msg}')
 
     def on_connect(cid):
         web.send_to(cid, {'type': 'hello', 'id': cid})
+        web.send_to(cid, {'type': 'courses', 'courses': COURSES})
         web.send_to(cid, map_msg)
 
     web = WebServer(os.path.join(PKG, 'web'), host='127.0.0.1', port=args.port,
                     on_message=on_message, on_connect=on_connect).start_in_thread()
     print(f'미리보기: http://localhost:{web.port}  (Ctrl+C 로 종료)')
     board = ObjectBoard()
-    route = ['출발점', '북쪽', '동쪽', '남쪽']
-    rx, ry, ryaw = -2.0, 0.3, 0.0                   # 수동 주행 시작 위치
+    pose = (-2.0, 0.3, 0.0)                         # 로봇 시작 위치
     blocked, dt, n = None, 0.1, 0
     t0 = time.time()
     while True:
         t = time.time() - t0
+        rx, ry, ryaw = pose
         # 사람: 10초 뒤 들어와서 천천히 걸음 (다리 두 개)
         people = []
         if t > 10:
@@ -123,31 +201,41 @@ def main():
             people = [(px, py + 0.1, 0.06), (px, py - 0.1, 0.06)]
             board.update({'event': 'moving' if t > 16 else 'detected', 'id': 1, 'x': px, 'y': py,
                           'width': 0.3, 'size': 'medium', 'moving': t > 16, 'person': t > 13}, t)
-        patrol = None
-        if args.patrol:                             # 방 안에서 타원을 그리며 순찰
-            a = t * 0.25
-            rx, ry, ryaw = -0.5 + 1.6 * math.cos(a), -0.2 + 1.1 * math.sin(a), a + math.pi / 2
-            idx = int(t / 8) % len(route)
-            patrol = {'state': 'watching' if (t % 8) > 6 else 'moving', 'lap': int(t / 32) + 1,
-                      'index': idx, 'name': route[idx]}
-        else:                                       # 조이스틱 명령대로 움직임 (서버와 같은 규칙)
-            with lock:
-                out = drive.step(time.monotonic())
-            blocked = None
-            if out is not None:
-                v, w = out
-                v, blocked = guard_speed(v, fake_scan(rx, ry, ryaw, people, 1))
-                nyaw = ryaw + w * dt
-                nx, ny = rx + v * math.cos(nyaw) * dt, ry + v * math.sin(nyaw) * dt
-                if all(dist_to_segment(nx, ny, *wall) > 0.12 for wall in WALLS):
-                    rx, ry, ryaw = nx, ny, nyaw
+        with lock:
+            patrol = sim['patrol']
+            if patrol is not None:                  # 순찰: 코스를 따라 움직임
+                pose, end = patrol.step(pose, t, dt)
+                sim['status'] = patrol.status()
+                if end:
+                    sim['last'] = {'course': patrol.course['id'], 'code': 0, 'stopped': end == 'stopped'}
+                    sim['patrol'] = None
+                    print(f'순찰 끝남: {end}')
+            out = drive.step(time.monotonic())
+        blocked = None
+        if patrol is None and out is not None:      # 조이스틱 명령대로 움직임 (서버와 같은 규칙)
+            v, w = out
+            v, blocked = guard_speed(v, fake_scan(rx, ry, ryaw, people, 1))
+            nyaw = ryaw + w * dt
+            nx, ny = rx + v * math.cos(nyaw) * dt, ry + v * math.sin(nyaw) * dt
+            if all(dist_to_segment(nx, ny, *wall) > 0.12 for wall in WALLS):
+                pose = (nx, ny, nyaw)
         n += 1
         if n % 2 == 0:                              # 상태는 5 Hz
             with lock:
                 manual = drive.snapshot()
+                patrol = sim['patrol']
+                running = patrol is not None
+                patrol_app = {'running': running and patrol.owner == 'app',
+                              'course': patrol.course['id'] if running and patrol.owner == 'app' else None,
+                              'laps': patrol.laps if running else None,
+                              'stopping': running and patrol.stop_at is not None,
+                              'owner': patrol.owner if running else None, 'last': sim['last']}
+                status = sim['status']
             manual['blocked'] = blocked
-            web.broadcast(build_state((rx, ry, ryaw), fake_scan(rx, ry, ryaw, people, 2), 7.38, -54, patrol,
-                                      board.snapshot(t), True, t, manual=manual, patrol_running=args.patrol))
+            rx, ry, ryaw = pose
+            web.broadcast(build_state(pose, fake_scan(rx, ry, ryaw, people, 2), 7.38, -54, status,
+                                      board.snapshot(t), True, t, manual=manual, patrol_running=running,
+                                      patrol_app=patrol_app))
         time.sleep(dt)
 
 

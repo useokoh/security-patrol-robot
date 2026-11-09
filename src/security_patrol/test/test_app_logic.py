@@ -4,11 +4,17 @@ import base64
 import math
 import os
 import sys
+import tempfile
 import unittest
+
+try:
+    import yaml  # noqa: F401  (코스 파일 시험에만 필요. 맥 기본 파이썬에는 없을 수 있다)
+except ImportError:
+    yaml = None
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'security_patrol'))
 from app_logic import (ManualDrive, ObjectBoard, build_state, encode_map, guard_speed,  # noqa: E402
-                       scan_to_points, yaw_from_quaternion)
+                       list_courses, scan_to_points, yaw_from_quaternion)
 
 
 class AppLogicTest(unittest.TestCase):
@@ -115,6 +121,37 @@ class GuardTest(unittest.TestCase):
 
     def test_can_be_turned_off(self):
         self.assertEqual(guard_speed(0.1, [[0.2, 0.0]], gap=0.0), (0.1, None))
+
+
+@unittest.skipIf(yaml is None, 'pyyaml 없음')
+class CourseTest(unittest.TestCase):
+
+    def write(self, folder, name, text):
+        with open(os.path.join(folder, name), 'w', encoding='utf-8') as f:
+            f.write(text)
+
+    def test_lists_only_patrol_files(self):
+        a, b = tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.write(a, 'patrol_route.yaml', 'patrol:\n  name: 기본 코스\n  dwell_time: 3\n  checkpoints:\n'
+                   '    - {name: 출발점, x: -3.0, y: 0.0}\n    - {name: 북쪽, x: 0, y: 2.4}\n')
+        self.write(a, 'mapping_route.yaml', 'auto_mapper:\n  ros__parameters: {}\n')   # 다른 형식
+        self.write(a, 'broken.yaml', 'patrol: [\n')                                    # 깨진 파일
+        self.write(a, 'notes.txt', 'patrol:\n')
+        self.write(b, 'patrol_route.yaml', 'patrol:\n  checkpoints:\n    - {name: A, x: 1, y: 2}\n')
+        paths, courses = list_courses([a, b, '/없는/폴더'])
+        self.assertEqual([c['id'] for c in courses], ['patrol_route', 'patrol_route_2'])   # 이름이 겹치면 번호
+        self.assertEqual(courses[0]['name'], '기본 코스')
+        self.assertEqual(courses[0]['dwell'], 3.0)
+        self.assertEqual(courses[0]['points'][1], {'name': '북쪽', 'x': 0.0, 'y': 2.4})
+        self.assertEqual(courses[1]['name'], 'patrol route')                             # 이름이 없으면 파일 이름
+        self.assertEqual(paths['patrol_route_2'], os.path.join(b, 'patrol_route.yaml'))
+        self.assertNotIn('path', courses[0])                                              # 앱에는 경로를 안 보낸다
+
+    def test_real_package_course(self):
+        here = os.path.join(os.path.dirname(__file__), '..', 'config')
+        _, courses = list_courses([here])
+        self.assertEqual([c['id'] for c in courses], ['patrol_route'])
+        self.assertEqual(len(courses[0]['points']), 9)
 
 
 if __name__ == '__main__':

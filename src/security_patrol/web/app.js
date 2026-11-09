@@ -1,9 +1,11 @@
-// SENTINEL 관제 앱 (1단계: 레이더 화면, 2단계: 수동 주행)
+// SENTINEL 관제 앱 (1단계: 레이더 화면, 2단계: 수동 주행, 3단계: 코스 선택·자동 순찰)
 // 서버(app_server)가 WebSocket(/ws)으로 지도(map)와 상태(state)를 보낸다.
 //   state.scan   : 로봇 기준 라이다 점 [[x, y], ...]  (x 앞, y 왼쪽, m)
 //   state.robot  : 지도 기준 로봇 위치 {x, y, yaw}  (위치추정 전에는 null)
 //   state.manual : 수동 주행 {owner, linear, angular, max_linear, blocked, reason}
-// 앱 → 서버: {type:'drive', lin, ang} (-1~1, 누르고 있는 동안 0.1초마다), {type:'stop'}
+//   state.patrol_app : 앱이 켠 순찰 {running, course, laps, stopping, owner('app'|'external'|null), last}
+// 앱 → 서버: {type:'drive', lin, ang} (-1~1, 누르고 있는 동안 0.1초마다), {type:'stop'},
+//            {type:'patrol_start', course, laps}, {type:'patrol_stop'}, {type:'courses'} (목록 새로 고침)
 'use strict';
 
 const COLORS = {
@@ -14,6 +16,7 @@ const RADAR_RANGES = [1, 2, 4, 8];          // 레이더 화면 반지름 단계
 
 const state = {
   map: null, mapImage: null, last: null, lastAt: 0, connected: false, myId: null,
+  courses: [], selectedCourse: null, laps: 0,
   mode: 'radar', radarIndex: 2, mapZoom: 1, pan: { x: 0, y: 0 },
 };
 
@@ -32,6 +35,8 @@ function connect() {
   socket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello') state.myId = msg.id;
+    else if (msg.type === 'courses') setCourses(msg.courses);
+    else if (msg.type === 'notice') showToast(msg.text, msg.level);
     else if (msg.type === 'map') setMap(msg);
     else if (msg.type === 'state') { state.last = msg; state.lastAt = performance.now(); }
   };
@@ -163,8 +168,35 @@ function drawLabels(labels, toScreen) {
   ctx.textAlign = 'center';
   for (const l of labels) {
     const [sx, sy] = toScreen(l.x, l.y);
-    ctx.fillStyle = l.color; ctx.fillText(l.text, sx, sy - 6 * (window.devicePixelRatio || 1));
+    ctx.textBaseline = l.center ? 'middle' : 'alphabetic';
+    ctx.font = `${l.center ? 'bold ' : ''}${(l.center ? 10 : 12) * (window.devicePixelRatio || 1)}px -apple-system, sans-serif`;
+    ctx.fillStyle = l.color; ctx.fillText(l.text, sx, l.center ? sy : sy - 6 * (window.devicePixelRatio || 1));
   }
+  ctx.textBaseline = 'alphabetic';
+}
+
+// 지도 기준 좌표계에서 그리기: 순찰 코스 (점선 경로 + 번호 원). 지금 가는 지점은 주황색으로 깜박인다
+function drawCourse(course, current, px, labels) {
+  if (!course || !course.points.length) return;
+  const pts = course.points, dpr = window.devicePixelRatio || 1;
+  const r = Math.max(0.07, 9 * dpr * px);
+  ctx.strokeStyle = 'rgba(95, 208, 255, 0.45)'; ctx.lineWidth = 2 * dpr * px;
+  ctx.setLineDash([6 * dpr * px, 5 * dpr * px]);
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+  pts.forEach((p, i) => {
+    const now = i === current;
+    if (now) {                                          // 깜박이는 바깥 고리
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 250);
+      ctx.strokeStyle = `rgba(245, 165, 36, ${0.3 + 0.5 * pulse})`; ctx.lineWidth = 3 * dpr * px;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r * (1.5 + 0.3 * pulse), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = now ? '#f5a524' : '#12305a'; ctx.strokeStyle = now ? '#ffd79a' : '#5fd0ff';
+    ctx.lineWidth = 1.5 * dpr * px;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    labels.push({ x: p.x, y: p.y, text: String(i + 1), color: now ? '#1a1205' : '#e8eef9', center: true });
+  });
 }
 
 // 한 번 그리다 오류가 나도 다음 화면은 계속 그린다
@@ -208,6 +240,7 @@ function draw() {
       ctx.rotate(-robot.yaw); ctx.translate(-robot.x, -robot.y);
       drawMapImage();
       ctx.globalAlpha = 1;
+      drawCourse(activeCourse(), currentPoint(), px, labels);
       drawObjects(s.objects, px, labels);
       ctx.restore();
     }
@@ -234,6 +267,7 @@ function draw() {
     const px = 1 / k;
     ctx.setTransform(k, 0, 0, -k, W / 2 - vx * k, H / 2 + vy * k);
     drawMapImage();
+    drawCourse(activeCourse(), currentPoint(), px, labels);
     drawObjects(s && s.objects, px, labels);
     if (robot) {
       ctx.save(); ctx.translate(robot.x, robot.y); ctx.rotate(robot.yaw);
@@ -277,6 +311,7 @@ function updateStatus() {
   if (running) $('patrol').innerHTML = p ? `순찰 <b>${PATROL_STATES[p.state] || p.state}</b>${where}` : '순찰 <b>시작 중</b>';
   else $('patrol').innerHTML = `순찰 <b>꺼짐</b>${p ? ' (마지막' + where + ')' : ''}`;
   updateDrive(s, fresh);
+  updateAuto(s, fresh);
 }
 
 // 수동 주행 탭 글자와 조이스틱 잠금
@@ -287,7 +322,8 @@ function updateDrive(s, fresh) {
   const m = s && s.manual, mine = m && m.owner != null && m.owner === state.myId;
   let text = '조이스틱으로 조종하세요', cls = '', locked = false;
   if (!state.connected || !fresh) { text = '로봇과 연결되어 있지 않습니다'; cls = 'bad'; locked = true; }
-  else if (s.patrol_running) { text = '순찰 중에는 수동 주행을 할 수 없습니다. 순찰을 먼저 멈추세요'; cls = 'warn'; locked = true; }
+  else if (s.patrol_running && s.patrol_app && s.patrol_app.owner === 'app') { text = '자동 순찰 중입니다'; cls = 'warn'; locked = true; }
+  else if (s.patrol_running) { text = '터미널에서 켠 순찰 중에는 수동 주행을 할 수 없습니다'; cls = 'warn'; locked = true; }
   else if (m && m.owner != null && !mine) { text = '다른 화면에서 조종 중입니다'; cls = 'warn'; locked = true; }
   else if (mine && m.blocked === 'front') { text = '앞이 막혀 전진을 멈췄습니다 (회전·후진 가능)'; cls = 'bad'; }
   else if (mine && m.blocked === 'back') { text = '뒤가 막혀 후진을 멈췄습니다 (회전·전진 가능)'; cls = 'bad'; }
@@ -296,6 +332,7 @@ function updateDrive(s, fresh) {
   const el = $('driveStatus');
   el.textContent = text; el.className = 'drive-status ' + cls;
   $('stick').classList.toggle('locked', locked);
+  $('stopPatrolForManual').hidden = !(s && s.patrol_app && s.patrol_app.owner === 'app' && !s.patrol_app.stopping);
   if (locked && joy.active) releaseStick();
   $('driveSpeed').textContent = m
     ? `지금 ${(m.blocked ? 0 : m.linear).toFixed(2)} m/s · 회전 ${m.angular.toFixed(2)}`
@@ -444,6 +481,116 @@ let savedSpeed = 50;
 try { savedSpeed = Number(localStorage.getItem('sentinel.speed')) || 50; } catch (e) { /* 기본값 */ }
 setSpeed(savedSpeed);
 setInterval(sendDrive, 100);
+
+// ---------- 자동 주행 (코스 선택·순찰 시작/정지) ----------
+
+const PATROL_WORDS = { moving: '이동 중', watching: '감시 중', skipped: '건너뜀', stopped: '중지됨' };
+let coursesKey = '';
+
+function courseById(id) { return state.courses.find((c) => c.id === id) || null; }
+
+// 순찰 중이면 그 코스, 아니면 고른 코스 (지도에 미리 보여 준다)
+function activeCourse() {
+  const pa = state.last && state.last.patrol_app;
+  if (pa && pa.running && pa.course) return courseById(pa.course);
+  if (state.last && state.last.patrol_running) return null;    // 터미널에서 켠 순찰: 코스를 모름
+  return courseById(state.selectedCourse);
+}
+
+function currentPoint() {
+  const s = state.last;
+  return s && s.patrol_running && s.patrol && s.patrol.index != null ? s.patrol.index : -1;
+}
+
+function setCourses(list) {
+  state.courses = list || [];
+  let saved = null;
+  try { saved = localStorage.getItem('sentinel.course'); } catch (e) { /* 저장 안 돼도 동작 */ }
+  if (!courseById(state.selectedCourse)) state.selectedCourse = courseById(saved) ? saved : (state.courses[0] || {}).id || null;
+  coursesKey = '';                                              // 목록을 다시 그리게
+}
+
+function renderCourses(disabled) {
+  const key = JSON.stringify([state.courses.map((c) => c.id), state.selectedCourse, disabled]);
+  if (key === coursesKey) return;                               // 바뀐 것이 없으면 다시 만들지 않는다
+  coursesKey = key;
+  const box = $('courses');
+  box.innerHTML = '';
+  if (!state.courses.length) {
+    box.innerHTML = '<p class="soon">코스 파일이 없습니다. route_recorder 로 순찰 지점을 기록하세요.</p>';
+    return;
+  }
+  for (const c of state.courses) {
+    const b = document.createElement('button');
+    b.className = 'course' + (c.id === state.selectedCourse ? ' on' : '');
+    b.disabled = disabled;
+    const name = document.createElement('b'); name.textContent = c.name;
+    const info = document.createElement('span'); info.textContent = `지점 ${c.points.length}개 · ${c.dwell}초 감시`;
+    b.append(name, info);
+    b.addEventListener('click', () => {
+      state.selectedCourse = c.id;
+      try { localStorage.setItem('sentinel.course', c.id); } catch (e) { /* 저장 안 돼도 동작 */ }
+      coursesKey = '';
+    });
+    box.append(b);
+  }
+}
+
+function updateAuto(s, fresh) {
+  const pa = (s && s.patrol_app) || {}, running = !!(s && s.patrol_running), mine = pa.owner === 'app';
+  renderCourses(running);
+  document.querySelectorAll('#lapChoice button').forEach((b) => { b.disabled = running; });
+
+  const btn = $('patrolBtn');
+  btn.classList.toggle('stop', mine);
+  if (!state.connected || !fresh) { btn.textContent = '연결 안 됨'; btn.disabled = true; }
+  else if (mine && pa.stopping) { btn.textContent = '멈추는 중…'; btn.disabled = true; }
+  else if (mine) { btn.textContent = '순찰 정지'; btn.disabled = false; }
+  else if (running) { btn.textContent = '터미널에서 켠 순찰이 도는 중'; btn.disabled = true; }
+  else { btn.textContent = '순찰 시작'; btn.disabled = !state.selectedCourse; }
+
+  // 진행 상황: n바퀴째 · k/N 지점, 막대는 정한 바퀴 전체(계속 반복이면 한 바퀴) 기준
+  const course = activeCourse(), p = s && s.patrol;
+  let text = '', ratio = 0;
+  if (running && p && course) {
+    const total = course.points.length, laps = pa.laps || 0;
+    const done = (p.lap - 1) * total + p.index + (p.state === 'moving' ? 0 : 1);
+    ratio = laps ? done / (laps * total) : ((p.index + (p.state === 'moving' ? 0 : 1)) / total);
+    text = `<b>${p.lap}바퀴째</b>${laps ? ` / ${laps}바퀴` : ' (계속 반복)'} · ${p.index + 1}/${total} 지점 `
+      + `'${escapeHtml(p.name)}' ${PATROL_WORDS[p.state] || p.state}`;
+  } else if (running) {
+    text = mine ? '순찰 준비 중 (위치 확인·Nav2 대기)…' : '터미널에서 켠 순찰 진행 중';
+  } else if (pa.last) {
+    text = pa.last.stopped ? '지난 순찰: 앱에서 멈춤' : pa.last.code === 0 ? '지난 순찰: 정한 바퀴를 모두 돎' : '지난 순찰: 중간에 멈춤 (연속 실패 등)';
+  }
+  $('progress').hidden = !text;
+  $('progressText').innerHTML = text;
+  $('progressBar').style.width = `${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%`;
+}
+
+function escapeHtml(v) {
+  return String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+let toastTimer = null;
+function showToast(text, level) {
+  const el = $('toast');
+  el.textContent = text; el.className = 'toast ' + (level || ''); el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+}
+
+document.querySelectorAll('#lapChoice button').forEach((b) => b.addEventListener('click', () => {
+  state.laps = Number(b.dataset.laps);
+  document.querySelectorAll('#lapChoice button').forEach((x) => x.classList.toggle('on', x === b));
+}));
+$('patrolBtn').addEventListener('click', () => {
+  const pa = state.last && state.last.patrol_app;
+  if (pa && pa.owner === 'app') send({ type: 'patrol_stop' });
+  else if (state.selectedCourse) { releaseAll(); send({ type: 'patrol_start', course: state.selectedCourse, laps: state.laps }); }
+});
+$('stopPatrolForManual').addEventListener('click', () => send({ type: 'patrol_stop' }));
+$('refreshCourses').addEventListener('click', () => send({ type: 'courses' }));
 
 // 지도 화면에서 끌어서 이동
 let drag = null;

@@ -59,6 +59,7 @@
         <div class="drive-side">
           <div class="drive-status" id="driveStatus">조이스틱으로 조종하세요</div>
           <div class="drive-speed" id="driveSpeed">-</div>
+          <button class="ghost" id="stopPatrolForManual" hidden>순찰 멈추고 수동 주행</button>
           <label class="speed">
             <span class="speed-head">속도 <b id="speedLabel">50%</b></span>
             <input type="range" id="speedRange" min="10" max="100" step="10" value="50" aria-label="최고 속도">
@@ -69,10 +70,25 @@
       <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · [ ] = 속도 · 스페이스 = 정지</p>
     </div>
     <div class="tab-body" data-body="auto" hidden>
-      <p class="soon">코스 선택과 자동 순찰은 3단계에서 추가됩니다.</p>
+      <div class="auto-head"><span>순찰 코스</span><button class="link" id="refreshCourses">목록 새로 고침</button></div>
+      <div class="courses" id="courses"><p class="soon">코스를 불러오는 중…</p></div>
+      <div class="auto-row">
+        <span class="auto-label">바퀴</span>
+        <div class="seg small" id="lapChoice">
+          <button data-laps="0" class="on">계속 반복</button>
+          <button data-laps="1">1바퀴</button>
+          <button data-laps="3">3바퀴</button>
+        </div>
+      </div>
+      <div class="progress" id="progress" hidden>
+        <div class="progress-text" id="progressText"></div>
+        <div class="bar"><i id="progressBar"></i></div>
+      </div>
+      <button class="go" id="patrolBtn">순찰 시작</button>
     </div>
   </section>
 </div>
+<div class="toast" id="toast" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>
