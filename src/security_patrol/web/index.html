@@ -70,7 +70,28 @@
       <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · [ ] = 속도 · 스페이스 = 정지</p>
     </div>
     <div class="tab-body" data-body="auto" hidden>
-      <div class="auto-head"><span>순찰 코스</span><button class="link" id="refreshCourses">목록 새로 고침</button></div>
+      <div class="auto-head"><span>순찰 코스</span>
+        <span><button class="link" id="planOpen">＋ 자동 만들기</button><button class="link" id="refreshCourses">새로 고침</button></span>
+      </div>
+      <!-- 지도로 코스 자동 만들기: 감시 거리를 고르면 지도에 미리보기, 저장하면 목록에 들어간다 -->
+      <div class="plan" id="planBox" hidden>
+        <div class="plan-title">지도로 코스 자동 만들기</div>
+        <div class="auto-row">
+          <span class="auto-label">감시 거리</span>
+          <div class="seg small" id="viewChoice">
+            <button data-view="1.5">촘촘 1.5m</button>
+            <button data-view="2.5" class="on">보통 2.5m</button>
+            <button data-view="3.5">넓게 3.5m</button>
+          </div>
+        </div>
+        <div class="plan-info" id="planInfo">계산 중…</div>
+        <input class="plan-name" id="planName" maxlength="30" placeholder="코스 이름 (비우면 날짜로)">
+        <div class="plan-actions">
+          <button class="btn2" id="planCancel">취소</button>
+          <button class="btn2 primary" id="planSave" disabled>이 코스 저장</button>
+        </div>
+      </div>
+      <div id="autoMain">
       <div class="courses" id="courses"><p class="soon">코스를 불러오는 중…</p></div>
       <div class="auto-row">
         <span class="auto-label">바퀴</span>
@@ -85,6 +106,7 @@
         <div class="bar"><i id="progressBar"></i></div>
       </div>
       <button class="go" id="patrolBtn">순찰 시작</button>
+      </div>
     </div>
   </section>
 </div>

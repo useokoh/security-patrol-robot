@@ -17,6 +17,7 @@ const RADAR_RANGES = [1, 2, 4, 8];          // 레이더 화면 반지름 단계
 const state = {
   map: null, mapImage: null, last: null, lastAt: 0, connected: false, myId: null,
   courses: [], selectedCourse: null, laps: 0,
+  planOpen: false, plan: null, view: 2.5,          // 코스 자동 만들기 (미리보기)
   mode: 'radar', radarIndex: 2, mapZoom: 1, pan: { x: 0, y: 0 },
 };
 
@@ -36,7 +37,13 @@ function connect() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'hello') state.myId = msg.id;
     else if (msg.type === 'courses') setCourses(msg.courses);
-    else if (msg.type === 'notice') showToast(msg.text, msg.level);
+    else if (msg.type === 'notice') { showToast(msg.text, msg.level); if (state.planOpen && !state.plan && msg.level === 'bad') $('planInfo').textContent = msg.text; }
+    else if (msg.type === 'course_plan') setPlan(msg.plan);
+    else if (msg.type === 'course_saved') {
+      state.selectedCourse = msg.id;
+      try { localStorage.setItem('sentinel.course', msg.id); } catch (e) { /* 저장 안 돼도 동작 */ }
+      closePlan();
+    }
     else if (msg.type === 'map') setMap(msg);
     else if (msg.type === 'state') { state.last = msg; state.lastAt = performance.now(); }
   };
@@ -180,7 +187,8 @@ function drawCourse(course, current, px, labels) {
   if (!course || !course.points.length) return;
   const pts = course.points, dpr = window.devicePixelRatio || 1;
   const r = Math.max(0.07, 9 * dpr * px);
-  ctx.strokeStyle = 'rgba(95, 208, 255, 0.45)'; ctx.lineWidth = 2 * dpr * px;
+  const preview = course.id === '__plan__';             // 자동 만들기 미리보기는 주황색
+  ctx.strokeStyle = preview ? 'rgba(245, 165, 36, 0.7)' : 'rgba(95, 208, 255, 0.45)'; ctx.lineWidth = 2 * dpr * px;
   ctx.setLineDash([6 * dpr * px, 5 * dpr * px]);
   ctx.beginPath();
   pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -192,7 +200,8 @@ function drawCourse(course, current, px, labels) {
       ctx.strokeStyle = `rgba(245, 165, 36, ${0.3 + 0.5 * pulse})`; ctx.lineWidth = 3 * dpr * px;
       ctx.beginPath(); ctx.arc(p.x, p.y, r * (1.5 + 0.3 * pulse), 0, Math.PI * 2); ctx.stroke();
     }
-    ctx.fillStyle = now ? '#f5a524' : '#12305a'; ctx.strokeStyle = now ? '#ffd79a' : '#5fd0ff';
+    ctx.fillStyle = now ? '#f5a524' : preview ? '#5a3a08' : '#12305a';
+    ctx.strokeStyle = now ? '#ffd79a' : preview ? '#f5a524' : '#5fd0ff';
     ctx.lineWidth = 1.5 * dpr * px;
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     labels.push({ x: p.x, y: p.y, text: String(i + 1), color: now ? '#1a1205' : '#e8eef9', center: true });
@@ -494,6 +503,7 @@ function activeCourse() {
   const pa = state.last && state.last.patrol_app;
   if (pa && pa.running && pa.course) return courseById(pa.course);
   if (state.last && state.last.patrol_running) return null;    // 터미널에서 켠 순찰: 코스를 모름
+  if (state.planOpen) return state.plan;                         // 자동 만들기 미리보기
   return courseById(state.selectedCourse);
 }
 
@@ -538,6 +548,10 @@ function renderCourses(disabled) {
 
 function updateAuto(s, fresh) {
   const pa = (s && s.patrol_app) || {}, running = !!(s && s.patrol_running), mine = pa.owner === 'app';
+  if (running && state.planOpen) closePlan();                    // 순찰이 시작되면 미리보기를 닫는다
+  $('planBox').hidden = !state.planOpen;
+  $('autoMain').hidden = state.planOpen;
+  $('planOpen').disabled = running || !state.connected;
   renderCourses(running);
   document.querySelectorAll('#lapChoice button').forEach((b) => { b.disabled = running; });
 
@@ -591,6 +605,45 @@ $('patrolBtn').addEventListener('click', () => {
 });
 $('stopPatrolForManual').addEventListener('click', () => send({ type: 'patrol_stop' }));
 $('refreshCourses').addEventListener('click', () => send({ type: 'courses' }));
+
+// ---------- 코스 자동 만들기 ----------
+// 서버가 지금 지도와 로봇 위치로 지점을 뽑아 보내 준다 (course_planner). 저장하면 코스 목록에 들어간다.
+
+function requestPlan() {
+  state.plan = null;
+  $('planInfo').textContent = '지도를 보고 지점을 고르는 중…';
+  $('planSave').disabled = true;
+  send({ type: 'course_plan', view: state.view });
+}
+
+function setPlan(plan) {
+  if (!state.planOpen) return;
+  state.plan = plan;
+  $('planInfo').innerHTML = `지점 <b>${plan.points.length}개</b> · 한 바퀴 약 <b>${plan.length.toFixed(1)} m</b> · `
+    + `라이다로 보이는 공간 <b>${Math.round(plan.coverage * 100)}%</b><br>`
+    + `<span class="soon">지도에 주황색 번호로 보입니다. 마음에 들면 저장하세요.</span>`;
+  $('planSave').disabled = false;
+}
+
+function closePlan() {
+  state.planOpen = false; state.plan = null;
+  coursesKey = '';
+}
+
+$('planOpen').addEventListener('click', () => {
+  state.planOpen = true; $('planName').value = '';
+  requestPlan();
+});
+$('planCancel').addEventListener('click', closePlan);
+$('planSave').addEventListener('click', () => {
+  $('planSave').disabled = true;
+  send({ type: 'course_save', name: $('planName').value.trim() });
+});
+document.querySelectorAll('#viewChoice button').forEach((b) => b.addEventListener('click', () => {
+  state.view = Number(b.dataset.view);
+  document.querySelectorAll('#viewChoice button').forEach((x) => x.classList.toggle('on', x === b));
+  requestPlan();
+}));
 
 // 지도 화면에서 끌어서 이동
 let drag = null;

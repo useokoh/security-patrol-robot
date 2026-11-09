@@ -132,3 +132,18 @@ button { font: inherit; color: inherit; }
 .toast.ok { border-color: var(--ok); }
 .toast.warn { border-color: var(--caution); }
 .toast.bad { border-color: var(--urgent); }
+
+/* 코스 자동 만들기 */
+.auto-head .link + .link { margin-left: 12px; }
+.plan { border: 1px dashed var(--caution); border-radius: 12px; padding: 12px; background: rgba(245, 165, 36, .05); }
+.plan-title { font-size: 13px; font-weight: 700; color: #ffd79a; }
+.plan .auto-row { margin-top: 10px; }
+.plan-info { margin-top: 10px; font-size: 13px; line-height: 1.5; }
+.plan-info b { color: #ffd79a; }
+.plan-name { width: 100%; margin-top: 10px; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: #0e1729; color: var(--text); font: inherit; font-size: 13px; }
+.plan-actions { display: flex; gap: 8px; margin-top: 10px; }
+.btn2 { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font-weight: 600; }
+.btn2.primary { background: #f5a524; border-color: #f5a524; color: #1a1205; }
+.btn2:disabled { opacity: .45; }

@@ -4,6 +4,7 @@
 2단계: 수동 주행 - 조이스틱 → cmd_vel. 손을 떼거나, 명령이 0.5초 끊기거나, 연결이 끊기면 정지.
        앞뒤가 막히면 전후진만 막고, 순찰이 켜져 있으면 수동 주행을 받지 않는다.
 3단계: 코스 선택·자동 순찰 - 코스 파일 목록을 앱에 보내고, 앱이 고른 코스로 patrol_node 를 켜고 끈다.
+3.5단계: 코스 자동 만들기 - 지금 지도와 로봇 위치로 순찰 지점을 뽑아(course_planner) 미리 보여 주고 저장한다.
 
   # 보통은 app.launch.py 로 한 번에 켠다 (시뮬레이션/실제 로봇 + Nav2 + 감지 + 앱 서버)
   ros2 launch security_patrol app.launch.py
@@ -14,6 +15,7 @@
   # 브라우저: 가상머신 안 http://localhost:8080, 맥 http://192.168.64.2:8080
 """
 
+import datetime
 import json
 import os
 import threading
@@ -34,7 +36,9 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from security_patrol.app_logic import (ManualDrive, ObjectBoard, build_state, encode_map, guard_speed,
                                        list_courses, scan_to_points, yaw_from_quaternion)
+from security_patrol.course_planner import plan_course
 from security_patrol.patrol_runner import PatrolRunner
+from security_patrol.route_file import route_yaml
 from security_patrol.web_server import WebServer
 
 
@@ -63,8 +67,14 @@ class AppServer(Node):
         # 실제 로봇이면 저장소 밖 ~/maps_real (route_recorder 가 저장하는 곳)
         self.sim = bool(self.get_parameter('use_sim_time').value)
         share = get_package_share_directory('security_patrol')
-        default_dirs = os.path.join(share, 'config') if self.sim else '~/maps_real'
+        # 자동으로 만든 코스를 저장할 곳 (시뮬레이션 코스와 실제 공간 코스가 섞이지 않게 나눈다)
+        self.save_dir = os.path.expanduser(p('save_dir', '~/sentinel_courses/sim' if self.sim else '~/maps_real').value)
+        default_dirs = f'{os.path.join(share, "config")},{self.save_dir}' if self.sim else self.save_dir
         self.course_dirs = [d.strip() for d in str(p('course_dirs', default_dirs).value).split(',') if d.strip()]
+        self.map_raw = None             # 코스 자동 만들기용 지도 원본
+        self.robot_pose = None          # 마지막으로 구한 로봇 위치 (map 기준)
+        self.plans = {}                 # 앱별 마지막 미리보기 코스
+        self.planning = False
         self.course_paths, self.courses = {}, []
         self.runner = PatrolRunner(os.path.join(get_package_prefix('security_patrol'), 'lib', 'security_patrol',
                                                 'patrol_node'), log=self.get_logger().info)
@@ -103,6 +113,8 @@ class AppServer(Node):
     def on_map(self, msg):
         info = msg.info
         q = info.origin.orientation
+        self.map_raw = (info.width, info.height, info.resolution,
+                        info.origin.position.x, info.origin.position.y, list(msg.data))
         self.map_msg = encode_map(info.width, info.height, info.resolution,
                                   info.origin.position.x, info.origin.position.y,
                                   yaw_from_quaternion(q.x, q.y, q.z, q.w), msg.data)
@@ -164,6 +176,57 @@ class AppServer(Node):
             self.patrol_running = True
             self.web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 시작합니다'})
 
+    def on_course_plan(self, cid, msg):
+        """지도로 코스를 만들어 그 앱에만 미리 보여 준다. 계산(약 1초)은 따로 돌려 화면이 멈추지 않게."""
+        try:
+            view = max(1.0, min(5.0, float(msg.get('view', 2.5))))
+        except (TypeError, ValueError):
+            view = 2.5
+        if self.map_raw is None:
+            return self.notice(cid, '아직 지도를 받지 못했습니다')
+        if self.robot_pose is None:
+            return self.notice(cid, '로봇 위치를 모릅니다 (위치추정이 된 뒤 다시 시도하세요)')
+        if self.planning:
+            return self.notice(cid, '코스를 만드는 중입니다. 잠시 뒤 다시 누르세요')
+        self.planning = True
+        threading.Thread(target=self.make_plan, args=(cid, view, self.map_raw, self.robot_pose[:2]),
+                         daemon=True).start()
+
+    def make_plan(self, cid, view, map_raw, start):
+        t0 = time.time()
+        try:
+            plan = plan_course(*map_raw, start, view_range=view)
+        except ValueError as e:
+            self.notice(cid, f'코스를 만들지 못했습니다: {e}', 'bad')
+            return
+        finally:
+            self.planning = False
+        plan.update(id='__plan__', name='자동 코스 (미리보기)', dwell=2.0, view=view)
+        self.plans[cid] = plan
+        self.get_logger().info(f'코스 자동 만들기: 감시 거리 {view} m → 지점 {len(plan["points"])}개, '
+                               f'한 바퀴 {plan["length"]} m, 보이는 공간 {plan["coverage"] * 100:.0f}% '
+                               f'({time.time() - t0:.1f}초)')
+        self.web.send_to(cid, {'type': 'course_plan', 'plan': plan})
+
+    def on_course_save(self, cid, msg):
+        plan = self.plans.get(cid)
+        if plan is None:
+            return self.notice(cid, '저장할 미리보기 코스가 없습니다')
+        now = datetime.datetime.now()
+        name = str(msg.get('name') or '').strip()[:30] or f'자동 코스 {now:%m/%d %H:%M}'
+        os.makedirs(self.save_dir, exist_ok=True)
+        path = os.path.join(self.save_dir, f'auto_{now:%Y%m%d_%H%M%S}.yaml')
+        text = route_yaml([(p['name'], p['x'], p['y']) for p in plan['points']], plan['dwell'], name=name,
+                          header=f'관제 앱이 지도에서 자동으로 만든 코스 (감시 거리 {plan["view"]} m)')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        self.get_logger().info(f'자동 코스 저장: {path}')
+        self.plans.pop(cid, None)
+        self.refresh_courses()
+        self.web.broadcast({'type': 'courses', 'courses': self.courses})
+        self.web.send_to(cid, {'type': 'course_saved', 'id': os.path.splitext(os.path.basename(path))[0]})
+        self.notice(cid, f"'{name}' 코스를 저장했습니다", 'ok')
+
     def on_patrol_stop(self, cid):
         if self.runner.running():
             self.runner.stop()
@@ -179,6 +242,10 @@ class AppServer(Node):
             return self.on_patrol_start(cid, msg)
         if kind == 'patrol_stop':
             return self.on_patrol_stop(cid)
+        if kind == 'course_plan':
+            return self.on_course_plan(cid, msg)
+        if kind == 'course_save':
+            return self.on_course_save(cid, msg)
         if kind == 'courses':
             self.refresh_courses()
             return self.web.send_to(cid, {'type': 'courses', 'courses': self.courses})
@@ -186,6 +253,7 @@ class AppServer(Node):
             before = self.drive.owner
             if kind == 'disconnected':
                 self.drive.disconnect(cid)
+                self.plans.pop(cid, None)
             elif kind == 'stop':
                 self.drive.stop()
             elif kind == 'drive':
@@ -265,6 +333,7 @@ class AppServer(Node):
         points = self.scan_points(self.scan_step)
         try:
             robot, localized = self.lookup(self.map_frame, self.base_frame), True
+            self.robot_pose = robot
         except TransformException:
             robot, localized = None, False
         now = self.now()

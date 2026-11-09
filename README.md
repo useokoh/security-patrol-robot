@@ -210,6 +210,10 @@ RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 �
   - 최대 속도는 서버에서 정합니다: `max_linear`(기본 0.15 m/s), `max_angular`(기본 1.0 rad/s), `guard_gap`(기본 0.15 m, 0 = 끔).
 - 자동 주행: 코스를 고르면 지도에 지점 번호와 경로가 보이고, 바퀴 수(계속 반복 / 1 / 3바퀴)를 골라 `순찰 시작`.
   - 진행 상황(몇 바퀴째, 몇 번째 지점, 막대)과 지금 가는 지점(주황색)이 보입니다. `순찰 정지`는 Ctrl+C 처럼 이동을 취소합니다.
+  - `＋ 자동 만들기`: 지금 지도와 로봇 위치로 순찰 지점을 자동으로 뽑습니다(`course_planner.py`). 감시 거리
+    (촘촘 1.5 / 보통 2.5 / 넓게 3.5 m)를 고르면 지도에 주황색으로 미리 보이고, 저장하면 목록에 들어갑니다.
+    벽에서 35 cm 이상 떨어진 곳 중 라이다로 새로 보이는 공간이 가장 많은 곳부터 고르고, 벽을 돌아가는 실제 이동
+    거리로 순서를 정합니다. 저장 위치: 시뮬레이션 `~/sentinel_courses/sim/`, 실제 로봇 `~/maps_real/`.
   - 앱 서버가 `patrol_node` 를 대신 켜고 끕니다. 코스 파일은 시뮬레이션이면 패키지 `config/`, 실제 로봇이면 `~/maps_real/`
     에서 찾습니다(`course_dirs` 파라미터로 바꿀 수 있음). 터미널에서 켠 순찰은 앱에서 멈추지 않고 그대로 둡니다.
 
@@ -257,6 +261,7 @@ src/security_patrol/
 ├── launch/app.launch.py            # 관제 앱 한 번에 켜기 (로봇 + Nav2 + 감지 + 앱 서버)
 ├── security_patrol/app_server.py  # 관제 앱 서버 노드 (ROS 데이터 → 브라우저)
 ├── security_patrol/patrol_runner.py  # 앱에서 patrol_node 켜고 끄기
+├── security_patrol/course_planner.py # 지도에서 순찰 코스 자동 만들기
 ├── security_patrol/web_server.py  # 정적 파일 + WebSocket 서버 (표준 라이브러리만)
 └── web/                           # 관제 앱 화면 (index.html, app.js, style.css)
 ```

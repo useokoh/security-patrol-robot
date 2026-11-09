@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.join(HERE, '..', 'src', 'security_patrol')
 sys.path.insert(0, os.path.join(PKG, 'security_patrol'))
 from app_logic import ManualDrive, ObjectBoard, build_state, encode_map, guard_speed, scan_to_points  # noqa: E402
+from course_planner import plan_course  # noqa: E402
 from web_server import WebServer  # noqa: E402
 
 # 가짜 방: 6 × 4 m 벽 + 가운데 상자 + 칸막이 (선분 목록)
@@ -63,7 +64,7 @@ def make_map():
             near = any(dist_to_segment(x, y, *w) < RES for w in WALLS)
             inside = -3 <= x <= 3 and -2 <= y <= 2
             data.append(100 if near else 0 if inside else -1)
-    return encode_map(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], 0.0, data)
+    return encode_map(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], 0.0, data), data
 
 
 def dist_to_segment(px, py, a, b):
@@ -139,7 +140,8 @@ def main():
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--patrol', action='store_true', help="'터미널에서 켠 순찰' 흉내 (앱에서 못 멈춤)")
     args = ap.parse_args()
-    map_msg = make_map()
+    map_msg, map_data = make_map()
+    plans = {}
     drive, lock = ManualDrive(max_linear=0.3, max_angular=1.2), threading.Lock()
     sim = {'patrol': FakePatrol(COURSES[0], 0, 'external') if args.patrol else None, 'last': None, 'status': None}
 
@@ -174,6 +176,23 @@ def main():
                 elif patrol.stop_at is None:
                     patrol.stop_at = time.time() - t0 + 1.5          # 이동 취소에 걸리는 시간 흉내
                     web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 멈추는 중입니다 (이동 취소)'})
+            elif kind == 'course_plan':                 # 실제 앱 서버와 같은 계산 (course_planner)
+                try:
+                    plan = plan_course(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], map_data, pose[:2],
+                                       view_range=float(msg.get('view', 2.5)))
+                    plan.update(id='__plan__', name='자동 코스 (미리보기)', dwell=2.0)
+                    plans[cid] = plan
+                    web.send_to(cid, {'type': 'course_plan', 'plan': plan})
+                except ValueError as e:
+                    notice(cid, f'코스를 만들지 못했습니다: {e}', 'bad')
+            elif kind == 'course_save' and cid in plans:   # 미리보기에서는 파일 대신 메모리에만 저장
+                plan = plans.pop(cid)
+                cid_new = f'auto_{len(COURSES)}'
+                COURSES.append({'id': cid_new, 'name': msg.get('name') or f'자동 코스 {len(COURSES)}',
+                                'dwell': 2.0, 'points': plan['points']})
+                web.broadcast({'type': 'courses', 'courses': COURSES})
+                web.send_to(cid, {'type': 'course_saved', 'id': cid_new})
+                notice(cid, '코스를 저장했습니다 (미리보기: 메모리에만)', 'ok')
             elif kind == 'courses':
                 web.send_to(cid, {'type': 'courses', 'courses': COURSES})
         if kind not in ('drive',):
