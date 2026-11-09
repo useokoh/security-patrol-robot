@@ -57,16 +57,16 @@
           <div class="knob" id="knob"></div>
         </div>
         <div class="drive-side">
-          <div class="drive-status" id="driveStatus">조이스틱을 끌면 움직입니다</div>
+          <div class="drive-status" id="driveStatus">조이스틱으로 조종하세요</div>
           <div class="drive-speed" id="driveSpeed">-</div>
-          <div class="seg small" id="speedLevel">
-            <button data-level="0.5" class="on">느리게</button>
-            <button data-level="1">보통</button>
-          </div>
+          <label class="speed">
+            <span class="speed-head">속도 <b id="speedLabel">50%</b></span>
+            <input type="range" id="speedRange" min="10" max="100" step="10" value="50" aria-label="최고 속도">
+          </label>
           <button class="estop" id="estop">정지</button>
         </div>
       </div>
-      <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · 스페이스 = 정지</p>
+      <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · [ ] = 속도 · 스페이스 = 정지</p>
     </div>
     <div class="tab-body" data-body="auto" hidden>
       <p class="soon">코스 선택과 자동 순찰은 3단계에서 추가됩니다.</p>

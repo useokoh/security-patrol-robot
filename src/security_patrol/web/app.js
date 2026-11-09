@@ -85,17 +85,52 @@ function drawScan(points, size) {
   for (const [x, y] of points) ctx.fillRect(x - size / 2, y - size / 2, size, size);
 }
 
+// 로봇 위에서 본 모습 (로봇 기준 좌표: x 앞, y 왼쪽, m). 실제 크기 0.26 x 0.20 m.
+// 멀리 축소해도 화면에서 26픽셀보다 작아지지 않게 키운다.
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
 function drawRobot(px) {
-  // 로봇 외곽 약 0.26 x 0.20 m, 앞쪽 화살표. 축소해도 화면에서 18픽셀보다 작아지지 않게 키운다
-  const sc = Math.max(1, (18 * (window.devicePixelRatio || 1) * px) / 0.26);
+  const dpr = window.devicePixelRatio || 1;
+  const sc = Math.max(1, (26 * dpr * px) / 0.26);
+  const lw = px / sc;                                   // 화면 1픽셀 두께
   ctx.save();
   ctx.scale(sc, sc);
-  ctx.fillStyle = 'rgba(52, 211, 153, 0.25)';
-  ctx.strokeStyle = COLORS.robot;
-  ctx.lineWidth = (2 * px) / sc;
-  ctx.beginPath(); ctx.rect(-0.13, -0.10, 0.26, 0.20); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0.20, 0); ctx.lineTo(0.06, 0.07); ctx.lineTo(0.06, -0.07); ctx.closePath();
-  ctx.fillStyle = COLORS.robot; ctx.fill();
+  // 바닥에 은은한 빛
+  const glow = ctx.createRadialGradient(0, 0, 0.03, 0, 0, 0.32);
+  glow.addColorStop(0, 'rgba(52, 211, 153, 0.30)'); glow.addColorStop(1, 'rgba(52, 211, 153, 0)');
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, 0.32, 0, Math.PI * 2); ctx.fill();
+  // 바퀴 4개
+  ctx.fillStyle = '#0b1220'; ctx.strokeStyle = '#64748b'; ctx.lineWidth = lw;
+  for (const wx of [0.075, -0.075]) {
+    for (const wy of [0.1, -0.1]) { roundRect(wx - 0.036, wy - 0.016, 0.072, 0.032, 0.012); ctx.fill(); ctx.stroke(); }
+  }
+  // 몸체: 앞쪽이 밝은 청록 그라디언트
+  const body = ctx.createLinearGradient(0.13, 0, -0.13, 0);
+  body.addColorStop(0, '#2dd4a7'); body.addColorStop(1, '#0f5f4c');
+  ctx.fillStyle = body; ctx.strokeStyle = '#a7f3d0'; ctx.lineWidth = 1.5 * lw;
+  roundRect(-0.13, -0.085, 0.26, 0.17, 0.045); ctx.fill(); ctx.stroke();
+  // 뒤쪽 홈 무늬
+  ctx.strokeStyle = 'rgba(11, 18, 32, 0.45)'; ctx.lineWidth = 1.2 * lw;
+  for (const gx of [-0.09, -0.105]) { ctx.beginPath(); ctx.moveTo(gx, -0.045); ctx.lineTo(gx, 0.045); ctx.stroke(); }
+  // 앞 범퍼 불빛
+  ctx.fillStyle = '#e6fffa'; roundRect(0.108, -0.055, 0.014, 0.11, 0.007); ctx.fill();
+  // 라이다: 어두운 원 + 돌아가는 빛
+  ctx.fillStyle = '#0b1220'; ctx.strokeStyle = '#5fd0ff'; ctx.lineWidth = 1.2 * lw;
+  ctx.beginPath(); ctx.arc(0.01, 0, 0.042, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  const a = (performance.now() / 300) % (Math.PI * 2);
+  ctx.fillStyle = 'rgba(95, 208, 255, 0.35)';
+  ctx.beginPath(); ctx.moveTo(0.01, 0); ctx.arc(0.01, 0, 0.036, a - 0.6, a); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#5fd0ff'; ctx.beginPath(); ctx.arc(0.01, 0, 0.012, 0, Math.PI * 2); ctx.fill();
+  // 진행 방향 표시 (몸 앞 작은 화살표)
+  ctx.fillStyle = '#34d399';
+  ctx.beginPath(); ctx.moveTo(0.215, 0); ctx.lineTo(0.16, 0.04); ctx.lineTo(0.172, 0); ctx.lineTo(0.16, -0.04); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
 
@@ -250,7 +285,7 @@ const STOP_REASONS = { timeout: '명령이 끊겨 자동으로 멈췄습니다',
 
 function updateDrive(s, fresh) {
   const m = s && s.manual, mine = m && m.owner != null && m.owner === state.myId;
-  let text = '조이스틱을 끌면 움직입니다', cls = '', locked = false;
+  let text = '조이스틱으로 조종하세요', cls = '', locked = false;
   if (!state.connected || !fresh) { text = '로봇과 연결되어 있지 않습니다'; cls = 'bad'; locked = true; }
   else if (s.patrol_running) { text = '순찰 중에는 수동 주행을 할 수 없습니다. 순찰을 먼저 멈추세요'; cls = 'warn'; locked = true; }
   else if (m && m.owner != null && !mine) { text = '다른 화면에서 조종 중입니다'; cls = 'warn'; locked = true; }
@@ -263,8 +298,9 @@ function updateDrive(s, fresh) {
   $('stick').classList.toggle('locked', locked);
   if (locked && joy.active) releaseStick();
   $('driveSpeed').textContent = m
-    ? `앞뒤 ${(m.blocked ? 0 : m.linear).toFixed(2)} m/s · 회전 ${m.angular.toFixed(2)} rad/s (최대 ${m.max_linear} m/s)`
+    ? `지금 ${(m.blocked ? 0 : m.linear).toFixed(2)} m/s · 회전 ${m.angular.toFixed(2)}`
     : '-';
+  updateSpeedLabel();
 }
 
 // ---------- 조작 ----------
@@ -291,21 +327,32 @@ document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('cli
 // 누르고 있는 동안 0.1초마다 값을 보낸다. 손을 떼면 바로 정지를 보내고,
 // 정지 신호가 유실돼도 서버가 0.5초 동안 값을 못 받으면 스스로 멈춘다.
 
-const DEAD_ZONE = 0.12;                    // 조이스틱 가운데 작은 흔들림은 무시
+const DEAD_ZONE = 0.10;                    // 조이스틱 가운데 작은 흔들림은 무시
+const CURVE = 2.0;                         // 감도 곡선: 반쯤 밀면 25% 속도 → 가운데 근처를 섬세하게
+const RAMP_STEP = 0.15;                    // 0.1초마다 늘어나는 최대 값 (0 → 최고 속도 약 0.7초). 줄이는 건 바로
 const KEYMAP = { ArrowUp: [1, 0], KeyW: [1, 0], ArrowDown: [-1, 0], KeyS: [-1, 0],
   ArrowLeft: [0, 1], KeyA: [0, 1], ArrowRight: [0, -1], KeyD: [0, -1] };     // [앞뒤, 회전]
 const joy = { active: false, pointerId: null, lin: 0, ang: 0 };
 const keys = new Set();
-let speedLevel = 0.5;                      // 느리게 0.5 / 보통 1 (서버 최대 속도에 곱함)
+let speedLevel = 0.5;                      // 속도 슬라이더 10~100% (서버 최대 속도에 곱함)
+const out = { lin: 0, ang: 0 };            // 실제로 보내는 값 (서서히 따라감)
 const stick = $('stick');
 
-function shape(v) {                        // 데드존을 뺀 나머지를 다시 0~1 로 펼친다
+function shape(v) {                        // 데드존을 뺀 나머지를 0~1 로 펼친 뒤 곡선을 준다
   const a = Math.abs(v);
-  return a < DEAD_ZONE ? 0 : Math.sign(v) * Math.min(1, (a - DEAD_ZONE) / (1 - DEAD_ZONE));
+  if (a < DEAD_ZONE) return 0;
+  return Math.sign(v) * Math.pow(Math.min(1, (a - DEAD_ZONE) / (1 - DEAD_ZONE)), CURVE);
+}
+
+// 목표 값으로 서서히 다가간다. 줄이거나 멈추는 건 바로, 방향이 바뀌면 먼저 0 으로 (안전)
+function ramp(cur, target) {
+  if (cur !== 0 && Math.sign(target) !== Math.sign(cur)) cur = 0;
+  if (Math.abs(target) <= Math.abs(cur)) return target;
+  return cur + Math.sign(target) * Math.min(RAMP_STEP, Math.abs(target - cur));
 }
 
 function moveKnob(e) {
-  const r = stick.getBoundingClientRect(), R = r.width / 2 - 29;   // 손잡이가 테두리 안에 머물게
+  const r = stick.getBoundingClientRect(), R = r.width / 2 - 31;   // 손잡이가 테두리 안에 머물게
   let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
   const d = Math.hypot(dx, dy);
   if (d > R) { dx *= R / d; dy *= R / d; }
@@ -326,10 +373,11 @@ function currentCommand() {
 function sendDrive() {
   if (!driving()) return;
   const [lin, ang] = currentCommand();
-  send({ type: 'drive', lin: lin * speedLevel, ang: ang * speedLevel });
+  out.lin = ramp(out.lin, lin); out.ang = ramp(out.ang, ang);
+  send({ type: 'drive', lin: out.lin * speedLevel, ang: out.ang * speedLevel });
 }
 
-function stopNow() { send({ type: 'stop' }); }
+function stopNow() { out.lin = out.ang = 0; send({ type: 'stop' }); }
 
 function releaseStick() {
   if (!joy.active) return;
@@ -352,6 +400,7 @@ stick.addEventListener('pointerdown', (e) => {
   stick.setPointerCapture(e.pointerId);
   joy.active = true; joy.pointerId = e.pointerId;
   stick.classList.add('active');
+  if (navigator.vibrate) navigator.vibrate(12);              // 안드로이드: 잡았다는 짧은 진동
   moveKnob(e);
   sendDrive();
 });
@@ -362,6 +411,9 @@ stick.addEventListener('pointermove', (e) => { if (joy.active && e.pointerId ===
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); releaseAll(); stopNow(); return; }
+  if (e.code === 'BracketLeft' || e.code === 'BracketRight') {           // [ ] 로 속도 10% 씩
+    setSpeed(speedLevel * 100 + (e.code === 'BracketRight' ? 10 : -10)); return;
+  }
   const manualOpen = !document.querySelector('[data-body="manual"]').hidden;
   if (!KEYMAP[e.code] || !manualOpen || stick.classList.contains('locked')) return;
   e.preventDefault();
@@ -375,10 +427,22 @@ window.addEventListener('blur', releaseAll);                  // 다른 창으�
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
 $('estop').addEventListener('pointerdown', (e) => { e.preventDefault(); releaseAll(); stopNow(); });
-document.querySelectorAll('#speedLevel button').forEach((b) => b.addEventListener('click', () => {
-  speedLevel = Number(b.dataset.level);
-  document.querySelectorAll('#speedLevel button').forEach((x) => x.classList.toggle('on', x === b));
-}));
+function setSpeed(percent) {
+  const p = Math.max(10, Math.min(100, Math.round(percent / 10) * 10));
+  speedLevel = p / 100;
+  $('speedRange').value = p;
+  $('speedRange').style.setProperty('--fill', `${((p - 10) / 90) * 100}%`);
+  try { localStorage.setItem('sentinel.speed', String(p)); } catch (e) { /* 저장 안 돼도 동작 */ }
+  updateSpeedLabel();
+}
+function updateSpeedLabel() {
+  const m = state.last && state.last.manual, p = Math.round(speedLevel * 100);
+  $('speedLabel').textContent = m ? `${p}% · ${(m.max_linear * speedLevel).toFixed(2)} m/s` : `${p}%`;
+}
+$('speedRange').addEventListener('input', (e) => setSpeed(Number(e.target.value)));
+let savedSpeed = 50;
+try { savedSpeed = Number(localStorage.getItem('sentinel.speed')) || 50; } catch (e) { /* 기본값 */ }
+setSpeed(savedSpeed);
 setInterval(sendDrive, 100);
 
 // 지도 화면에서 끌어서 이동
