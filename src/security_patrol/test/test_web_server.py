@@ -94,6 +94,16 @@ class ServerTest(unittest.TestCase):
         self.assertIn('안녕'.encode(), data)
         self.assertIn(b'charset=utf-8', data)
 
+    def test_symlinked_file_served(self):
+        # colcon --symlink-install 은 화면 파일을 다른 폴더의 원본에 대한 링크로 설치한다
+        other = tempfile.mkdtemp()
+        with open(os.path.join(other, 'app.js'), 'w', encoding='utf-8') as f:
+            f.write('var ok = 1;')
+        os.symlink(os.path.join(other, 'app.js'), os.path.join(self.dir, 'app.js'))
+        data = self.http('/app.js')
+        self.assertIn(b'200 OK', data)
+        self.assertIn(b'var ok = 1;', data)
+
     def test_path_traversal_blocked(self):
         self.assertIn(b'404', self.http('/../../etc/passwd'))
         self.assertIn(b'404', self.http('/%2e%2e/secret'))

@@ -73,7 +73,7 @@ class Client:
 class WebServer:
 
     def __init__(self, static_dir, host='0.0.0.0', port=8080, on_message=None, on_connect=None, log=print):
-        self.static_dir = os.path.realpath(static_dir)
+        self.static_dir = os.path.abspath(static_dir)
         self.host, self.port = host, port
         self.on_message = on_message or (lambda cid, msg: None)
         self.on_connect = on_connect or (lambda cid: None)
@@ -184,7 +184,9 @@ class WebServer:
         path = path.split('?', 1)[0]
         if path in ('', '/'):
             path = '/index.html'
-        full = os.path.realpath(os.path.join(self.static_dir, path.lstrip('/')))
+        # '..' 로 폴더 밖을 못 나가게 막는다. 링크는 따라가지 않고 판단한다
+        # (colcon --symlink-install 은 화면 파일을 src 쪽 원본에 대한 링크로 설치한다)
+        full = os.path.normpath(os.path.join(self.static_dir, path.lstrip('/')))
         if not full.startswith(self.static_dir + os.sep) or not os.path.isfile(full):
             body = b'not found'
             writer.write(b'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n'
