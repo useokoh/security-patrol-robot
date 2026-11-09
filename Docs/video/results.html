@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SENTINEL 결과</title>
+<style>
+  :root { --bg: #0e1726; --panel: #16223a; --line: #2b3b5c; --text: #e8eef9; --muted: #9fb0cc;
+          --real: #f5a524; --sim: #38bdf8; --good: #34d399; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1920px; height: 1080px; background: var(--bg); color: var(--text);
+         font-family: "Apple SD Gothic Neo", sans-serif; padding: 56px 80px; overflow: hidden; }
+  h1 { font-size: 52px; font-weight: 700; letter-spacing: -0.02em; }
+  .sub { font-size: 26px; color: var(--muted); margin-top: 10px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 44px; }
+  .col h2 { font-size: 30px; font-weight: 700; padding-bottom: 14px; margin-bottom: 22px;
+            border-bottom: 4px solid; }
+  .col h2 small { font-size: 22px; color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .tile { background: var(--panel); border: 2px solid var(--line); border-radius: 18px; padding: 26px 28px;
+          height: 310px; display: flex; flex-direction: column; justify-content: space-between; }
+  .num { font-size: 76px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .num small { font-size: 34px; font-weight: 700; margin-left: 4px; }
+  .lbl { font-size: 24px; line-height: 1.35; }
+  .lbl span { display: block; font-size: 20px; color: var(--muted); margin-top: 4px; }
+  .foot { position: absolute; left: 80px; bottom: 50px; font-size: 22px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>SENTINEL 결과</h1>
+  <div class="sub">시뮬레이션에서 먼저 검증하고, 같은 프로그램을 실제 로봇에 옮겨 재현했다</div>
+
+  <div class="cols">
+    <div class="col">
+      <h2 style="border-color: var(--real);">실제 로봇<small>약 3 × 3 m 방</small></h2>
+      <div class="grid">
+        <div class="tile">
+          <div class="num" style="color: var(--good);">4/4</div>
+          <div class="lbl">순찰 지점 도착<span>1바퀴 164초</span></div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--good);">0<small>회</small></div>
+          <div class="lbl">순찰 중 복구 동작<span>막힘 없이 반복 순찰</span></div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--good);">0<small>건</small></div>
+          <div class="lbl">오경보<span>사람 없이 약 5분 순찰</span></div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--real); font-size: 60px;">주의 → 긴급</div>
+          <div class="lbl">사람 진입 시 휴대폰 알림<span>멈추면 주의, 걸으면 긴급</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h2 style="border-color: var(--sim);">시뮬레이션 통합 시험<small>Gazebo · 4바퀴</small></h2>
+      <div class="grid">
+        <div class="tile">
+          <div class="num" style="color: var(--good);">0<small>건</small></div>
+          <div class="lbl">오경보<span>4바퀴 내내</span></div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--good);">4/4</div>
+          <div class="lbl">넣어 둔 물체 감지<span>사람 2 · 상자 · 작은 병</span></div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--sim);">0.3~1.7<small>초</small></div>
+          <div class="lbl">처음 보인 뒤 감지 확정</div>
+        </div>
+        <div class="tile">
+          <div class="num" style="color: var(--sim);">≤ 0.22<small>m</small></div>
+          <div class="lbl">감지 위치 오차</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">ROS2 Humble · Nav2 · slam_toolbox · 텔레그램 경보 · 단위 시험 105개 · GitHub 공개 저장소</div>
+</body>
+</html>
