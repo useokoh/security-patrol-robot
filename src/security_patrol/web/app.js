@@ -1,7 +1,9 @@
-// SENTINEL 관제 앱 (1단계: 레이더 화면)
+// SENTINEL 관제 앱 (1단계: 레이더 화면, 2단계: 수동 주행)
 // 서버(app_server)가 WebSocket(/ws)으로 지도(map)와 상태(state)를 보낸다.
-//   state.scan  : 로봇 기준 라이다 점 [[x, y], ...]  (x 앞, y 왼쪽, m)
-//   state.robot : 지도 기준 로봇 위치 {x, y, yaw}  (위치추정 전에는 null)
+//   state.scan   : 로봇 기준 라이다 점 [[x, y], ...]  (x 앞, y 왼쪽, m)
+//   state.robot  : 지도 기준 로봇 위치 {x, y, yaw}  (위치추정 전에는 null)
+//   state.manual : 수동 주행 {owner, linear, angular, max_linear, blocked, reason}
+// 앱 → 서버: {type:'drive', lin, ang} (-1~1, 누르고 있는 동안 0.1초마다), {type:'stop'}
 'use strict';
 
 const COLORS = {
@@ -11,7 +13,7 @@ const COLORS = {
 const RADAR_RANGES = [1, 2, 4, 8];          // 레이더 화면 반지름 단계 [m]
 
 const state = {
-  map: null, mapImage: null, last: null, lastAt: 0, connected: false,
+  map: null, mapImage: null, last: null, lastAt: 0, connected: false, myId: null,
   mode: 'radar', radarIndex: 2, mapZoom: 1, pan: { x: 0, y: 0 },
 };
 
@@ -25,11 +27,12 @@ let socket = null;
 function connect() {
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   socket.onopen = () => { state.connected = true; };
-  socket.onclose = () => { state.connected = false; setTimeout(connect, 2000); };
+  socket.onclose = () => { state.connected = false; state.myId = null; releaseAll(); setTimeout(connect, 2000); };
   socket.onerror = () => socket.close();
   socket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === 'map') setMap(msg);
+    if (msg.type === 'hello') state.myId = msg.id;
+    else if (msg.type === 'map') setMap(msg);
     else if (msg.type === 'state') { state.last = msg; state.lastAt = performance.now(); }
   };
 }
@@ -94,6 +97,14 @@ function drawRobot(px) {
   ctx.beginPath(); ctx.moveTo(0.20, 0); ctx.lineTo(0.06, 0.07); ctx.lineTo(0.06, -0.07); ctx.closePath();
   ctx.fillStyle = COLORS.robot; ctx.fill();
   ctx.restore();
+}
+
+// 수동 주행 중 앞/뒤가 막혀 멈췄으면 막힌 구역을 빨갛게 (서버 guard_speed 와 같은 크기)
+function drawBlocked(m) {
+  if (!m || !m.blocked) return;
+  const x0 = m.blocked === 'front' ? 0.13 : -0.28;
+  ctx.fillStyle = 'rgba(248, 113, 113, 0.35)';
+  ctx.fillRect(x0, -0.14, 0.15, 0.28);
 }
 
 // 지도 기준 좌표계에서 그리기: 감지 물체
@@ -166,6 +177,7 @@ function draw() {
       ctx.restore();
     }
     if (s) drawScan(s.scan, 3 * dpr * px);
+    drawBlocked(s && s.manual);
     drawRobot(px);
     const toScreen = (x, y) => {                     // 지도 좌표 → 화면 (라벨용)
       const dx = x - robot.x, dy = y - robot.y, c = Math.cos(-robot.yaw), n = Math.sin(-robot.yaw);
@@ -191,6 +203,7 @@ function draw() {
     if (robot) {
       ctx.save(); ctx.translate(robot.x, robot.y); ctx.rotate(robot.yaw);
       drawScan(s.scan, 3 * dpr * px);
+      drawBlocked(s.manual);
       drawRobot(px);
       ctx.restore();
     }
@@ -224,10 +237,34 @@ function updateStatus() {
   else if (state.mode === 'map' && s && !s.localized) warn = '위치추정 전이라 지도 위 로봇 위치를 모릅니다';
   banner.hidden = !warn; banner.textContent = warn;
 
-  const p = s && s.patrol;
-  $('patrol').innerHTML = p
-    ? `순찰 <b>${PATROL_STATES[p.state] || p.state}</b> · ${p.lap}바퀴 · ${p.index + 1}번째 지점 <b>${p.name}</b>`
-    : '순찰 정보 없음 (순찰이 꺼져 있음)';
+  const p = s && s.patrol, running = s && s.patrol_running;
+  const where = p ? ` · ${p.lap}바퀴 · ${p.index + 1}번째 지점 <b>${p.name}</b>` : '';
+  if (running) $('patrol').innerHTML = p ? `순찰 <b>${PATROL_STATES[p.state] || p.state}</b>${where}` : '순찰 <b>시작 중</b>';
+  else $('patrol').innerHTML = `순찰 <b>꺼짐</b>${p ? ' (마지막' + where + ')' : ''}`;
+  updateDrive(s, fresh);
+}
+
+// 수동 주행 탭 글자와 조이스틱 잠금
+const STOP_REASONS = { timeout: '명령이 끊겨 자동으로 멈췄습니다', disconnected: '조종하던 화면의 연결이 끊겨 멈췄습니다',
+  patrol: '순찰이 켜져서 수동 주행을 멈췄습니다' };
+
+function updateDrive(s, fresh) {
+  const m = s && s.manual, mine = m && m.owner != null && m.owner === state.myId;
+  let text = '조이스틱을 끌면 움직입니다', cls = '', locked = false;
+  if (!state.connected || !fresh) { text = '로봇과 연결되어 있지 않습니다'; cls = 'bad'; locked = true; }
+  else if (s.patrol_running) { text = '순찰 중에는 수동 주행을 할 수 없습니다. 순찰을 먼저 멈추세요'; cls = 'warn'; locked = true; }
+  else if (m && m.owner != null && !mine) { text = '다른 화면에서 조종 중입니다'; cls = 'warn'; locked = true; }
+  else if (mine && m.blocked === 'front') { text = '앞이 막혀 전진을 멈췄습니다 (회전·후진 가능)'; cls = 'bad'; }
+  else if (mine && m.blocked === 'back') { text = '뒤가 막혀 후진을 멈췄습니다 (회전·전진 가능)'; cls = 'bad'; }
+  else if (mine) { text = '조종 중'; cls = 'ok'; }
+  else if (m && STOP_REASONS[m.reason]) { text = STOP_REASONS[m.reason]; cls = 'warn'; }
+  const el = $('driveStatus');
+  el.textContent = text; el.className = 'drive-status ' + cls;
+  $('stick').classList.toggle('locked', locked);
+  if (locked && joy.active) releaseStick();
+  $('driveSpeed').textContent = m
+    ? `앞뒤 ${(m.blocked ? 0 : m.linear).toFixed(2)} m/s · 회전 ${m.angular.toFixed(2)} rad/s (최대 ${m.max_linear} m/s)`
+    : '-';
 }
 
 // ---------- 조작 ----------
@@ -245,9 +282,104 @@ $('zoomOut').addEventListener('click', () => {
   else { state.mapZoom = Math.max(0.5, state.mapZoom / 1.5); if (state.mapZoom <= 1) state.pan = { x: 0, y: 0 }; }
 });
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.tab !== 'manual') releaseAll();          // 수동 주행 탭을 떠나면 멈춘다
   document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
   document.querySelectorAll('.tab-body').forEach((x) => { x.hidden = x.dataset.body !== b.dataset.tab; });
 }));
+
+// ---------- 수동 주행 ----------
+// 누르고 있는 동안 0.1초마다 값을 보낸다. 손을 떼면 바로 정지를 보내고,
+// 정지 신호가 유실돼도 서버가 0.5초 동안 값을 못 받으면 스스로 멈춘다.
+
+const DEAD_ZONE = 0.12;                    // 조이스틱 가운데 작은 흔들림은 무시
+const KEYMAP = { ArrowUp: [1, 0], KeyW: [1, 0], ArrowDown: [-1, 0], KeyS: [-1, 0],
+  ArrowLeft: [0, 1], KeyA: [0, 1], ArrowRight: [0, -1], KeyD: [0, -1] };     // [앞뒤, 회전]
+const joy = { active: false, pointerId: null, lin: 0, ang: 0 };
+const keys = new Set();
+let speedLevel = 0.5;                      // 느리게 0.5 / 보통 1 (서버 최대 속도에 곱함)
+const stick = $('stick');
+
+function shape(v) {                        // 데드존을 뺀 나머지를 다시 0~1 로 펼친다
+  const a = Math.abs(v);
+  return a < DEAD_ZONE ? 0 : Math.sign(v) * Math.min(1, (a - DEAD_ZONE) / (1 - DEAD_ZONE));
+}
+
+function moveKnob(e) {
+  const r = stick.getBoundingClientRect(), R = r.width / 2 - 29;   // 손잡이가 테두리 안에 머물게
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const d = Math.hypot(dx, dy);
+  if (d > R) { dx *= R / d; dy *= R / d; }
+  $('knob').style.transform = `translate(${dx}px, ${dy}px)`;
+  joy.lin = shape(-dy / R);                // 위로 밀면 앞으로
+  joy.ang = shape(-dx / R);                // 왼쪽으로 밀면 왼쪽으로 회전 (반시계)
+}
+
+function driving() { return joy.active || keys.size > 0; }
+
+function currentCommand() {
+  if (joy.active) return [joy.lin, joy.ang];
+  let lin = 0, ang = 0;
+  for (const k of keys) { lin += KEYMAP[k][0]; ang += KEYMAP[k][1]; }
+  return [Math.max(-1, Math.min(1, lin)), Math.max(-1, Math.min(1, ang))];
+}
+
+function sendDrive() {
+  if (!driving()) return;
+  const [lin, ang] = currentCommand();
+  send({ type: 'drive', lin: lin * speedLevel, ang: ang * speedLevel });
+}
+
+function stopNow() { send({ type: 'stop' }); }
+
+function releaseStick() {
+  if (!joy.active) return;
+  joy.active = false; joy.pointerId = null; joy.lin = joy.ang = 0;
+  stick.classList.remove('active');
+  $('knob').style.transform = '';
+  if (!driving()) stopNow();
+}
+
+function releaseAll() {
+  const was = driving();
+  keys.clear();
+  if (joy.active) releaseStick();
+  else if (was) stopNow();
+}
+
+stick.addEventListener('pointerdown', (e) => {
+  if (stick.classList.contains('locked') || joy.active) return;
+  e.preventDefault();
+  stick.setPointerCapture(e.pointerId);
+  joy.active = true; joy.pointerId = e.pointerId;
+  stick.classList.add('active');
+  moveKnob(e);
+  sendDrive();
+});
+stick.addEventListener('pointermove', (e) => { if (joy.active && e.pointerId === joy.pointerId) moveKnob(e); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((type) => stick.addEventListener(type, (e) => {
+  if (e.pointerId === joy.pointerId) releaseStick();
+}));
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); releaseAll(); stopNow(); return; }
+  const manualOpen = !document.querySelector('[data-body="manual"]').hidden;
+  if (!KEYMAP[e.code] || !manualOpen || stick.classList.contains('locked')) return;
+  e.preventDefault();
+  if (!keys.has(e.code)) { keys.add(e.code); sendDrive(); }
+});
+window.addEventListener('keyup', (e) => {
+  if (!keys.delete(e.code)) return;
+  if (driving()) sendDrive(); else stopNow();
+});
+window.addEventListener('blur', releaseAll);                  // 다른 창으로 가면 키가 눌린 채 남지 않게
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+
+$('estop').addEventListener('pointerdown', (e) => { e.preventDefault(); releaseAll(); stopNow(); });
+document.querySelectorAll('#speedLevel button').forEach((b) => b.addEventListener('click', () => {
+  speedLevel = Number(b.dataset.level);
+  document.querySelectorAll('#speedLevel button').forEach((x) => x.classList.toggle('on', x === b));
+}));
+setInterval(sendDrive, 100);
 
 // 지도 화면에서 끌어서 이동
 let drag = null;
@@ -266,4 +398,4 @@ window.addEventListener('resize', resize);
 resize();
 connect();
 requestAnimationFrame(render);
-window.SENTINEL = { send };       // 다음 단계(수동·자동 주행)에서 쓴다
+window.SENTINEL = { send };       // 다음 단계(자동 주행)와 디버깅에서 쓴다

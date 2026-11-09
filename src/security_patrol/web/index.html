@@ -51,7 +51,22 @@
       <button data-tab="auto">자동 주행</button>
     </div>
     <div class="tab-body" data-body="manual">
-      <p class="soon">조이스틱 수동 주행은 다음 단계(2단계)에서 추가됩니다.</p>
+      <div class="drive">
+        <!-- 조이스틱: 위 = 앞으로, 좌우 = 제자리 회전. 손을 떼면 바로 정지 -->
+        <div class="stick" id="stick" role="application" aria-label="조이스틱">
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="drive-side">
+          <div class="drive-status" id="driveStatus">조이스틱을 끌면 움직입니다</div>
+          <div class="drive-speed" id="driveSpeed">-</div>
+          <div class="seg small" id="speedLevel">
+            <button data-level="0.5" class="on">느리게</button>
+            <button data-level="1">보통</button>
+          </div>
+          <button class="estop" id="estop">정지</button>
+        </div>
+      </div>
+      <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · 스페이스 = 정지</p>
     </div>
     <div class="tab-body" data-body="auto" hidden>
       <p class="soon">코스 선택과 자동 순찰은 3단계에서 추가됩니다.</p>

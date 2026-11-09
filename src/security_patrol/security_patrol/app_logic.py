@@ -73,7 +73,100 @@ class ObjectBoard:
                 for o in self.objects.values()]
 
 
-def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, now):
+# ---------- 수동 주행 (2단계) ----------
+
+ROBOT_HALF_LENGTH = 0.13   # 로봇 외곽 0.26 x 0.20 m (Nav2 footprint 와 같은 값)
+ROBOT_HALF_WIDTH = 0.10
+
+
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+class ManualDrive:
+    """앱 조이스틱 수동 주행의 안전 규칙. 서버가 이 결과만 cmd_vel 로 보낸다.
+
+    - 한 번에 한 화면만 조종한다. 먼저 움직인 화면이 주인이 되고, 정지하거나 연결이 끊기면 풀린다.
+    - 앱 명령이 timeout 초 넘게 안 오면 멈춘다. (손을 뗐는데 정지 신호가 유실됐거나 Wi-Fi 가 끊긴 경우)
+    - 앱은 -1~1 비율만 보내고, 실제 속도는 서버의 최대값으로 정한다. 앱이 보낸 값을 그대로 믿지 않는다.
+    - 멈출 때는 0 속도를 stop_ticks 번 보내고 그 뒤에는 보내지 않는다. 계속 0 을 보내면
+      자동 순찰(Nav2)이나 키보드 조종과 다투기 때문이다.
+    """
+
+    def __init__(self, max_linear=0.15, max_angular=1.0, timeout=0.5, stop_ticks=3):
+        self.max_linear, self.max_angular = max_linear, max_angular
+        self.timeout, self.stop_ticks = timeout, stop_ticks
+        self.owner = None              # 조종 중인 앱 번호
+        self.linear = self.angular = 0.0
+        self.last = 0.0                # 마지막 명령 시각
+        self.zero_left = 0             # 앞으로 보낼 0 속도 횟수
+        self.reason = None             # 마지막으로 멈춘 이유 (화면 표시용)
+
+    def command(self, cid, lin, ang, now):
+        """앱 #cid 의 조이스틱 값(-1~1). 받아들이면 None, 아니면 거절 이유('busy')."""
+        if self.owner not in (None, cid):
+            return 'busy'
+        try:
+            lin, ang = float(lin), float(ang)
+        except (TypeError, ValueError):
+            return 'bad'
+        if not (math.isfinite(lin) and math.isfinite(ang)):
+            return 'bad'
+        self.owner, self.last, self.reason = cid, now, None
+        self.linear = clamp(lin, -1.0, 1.0) * self.max_linear
+        self.angular = clamp(ang, -1.0, 1.0) * self.max_angular
+        return None
+
+    def stop(self, reason='stop'):
+        """정지 (어느 화면이든 누를 수 있다)."""
+        if self.owner is not None or self.linear or self.angular:
+            self.zero_left = self.stop_ticks
+            self.reason = reason
+        self.owner = None
+        self.linear = self.angular = 0.0
+
+    def disconnect(self, cid):
+        if self.owner == cid:
+            self.stop('disconnected')
+
+    def step(self, now):
+        """주기마다 부른다. 보낼 (linear, angular) 또는 보낼 것이 없으면 None."""
+        if self.owner is not None and now - self.last > self.timeout:
+            self.stop('timeout')
+        if self.owner is not None:
+            return self.linear, self.angular
+        if self.zero_left > 0:
+            self.zero_left -= 1
+            return 0.0, 0.0
+        return None
+
+    def snapshot(self):
+        return {'owner': self.owner, 'linear': round(self.linear, 3), 'angular': round(self.angular, 3),
+                'max_linear': self.max_linear, 'max_angular': self.max_angular, 'reason': self.reason}
+
+
+def guard_speed(linear, points, gap=0.15, side_margin=0.04):
+    """가는 방향(앞/뒤)으로 차체 폭 안에 gap m 보다 가까운 라이다 점이 있으면 전후진을 0 으로 막는다.
+
+    회전은 막지 않는다 (제자리에서 돌아 빠져나갈 수 있게). 돌려주는 값: (linear, 'front' | 'back' | None)
+    points 는 로봇 기준 점 [[x, y], ...]. 차체 안쪽 점(라이다가 자기 몸을 본 것)은 무시한다.
+    gap 이 0 이하면 끈다.
+    """
+    if gap <= 0 or linear == 0:
+        return linear, None
+    half_w = ROBOT_HALF_WIDTH + side_margin
+    for x, y in points:
+        if abs(y) > half_w:
+            continue
+        if linear > 0 and ROBOT_HALF_LENGTH <= x < ROBOT_HALF_LENGTH + gap:
+            return 0.0, 'front'
+        if linear < 0 and -ROBOT_HALF_LENGTH - gap < x <= -ROBOT_HALF_LENGTH:
+            return 0.0, 'back'
+    return linear, None
+
+
+def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, now,
+                manual=None, patrol_running=None):
     """앱에 주기적으로 보내는 상태 한 덩어리."""
     robot = None
     if robot_pose is not None:
@@ -81,4 +174,5 @@ def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, n
         robot = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
     return {'type': 'state', 't': round(now, 2), 'robot': robot, 'localized': localized,
             'scan': points, 'battery': None if battery is None else round(battery, 2),
-            'rssi': rssi, 'patrol': patrol, 'objects': objects}
+            'rssi': rssi, 'patrol': patrol, 'patrol_running': patrol_running,
+            'objects': objects, 'manual': manual}

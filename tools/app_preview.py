@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """맥에서 앱 화면 미리보기 (ROS·가상머신 없이). 가짜 방·로봇·라이다·사람을 만들어 앱 서버와 같은 데이터를 보낸다.
 
-  python3 tools/app_preview.py            # 브라우저에서 http://localhost:8765
+  python3 tools/app_preview.py            # 브라우저에서 http://localhost:8765 → 조이스틱으로 가짜 로봇 운전
+  python3 tools/app_preview.py --patrol   # 로봇이 혼자 순찰 (수동 주행이 잠기는지 보기)
   python3 tools/app_preview.py --port 9000
 
-화면을 고칠 때 가상머신을 켜지 않고 바로 확인하는 용도다. 앱이 보내는 명령은 터미널에 찍기만 한다.
+화면을 고칠 때 가상머신을 켜지 않고 바로 확인하는 용도다. 수동 주행은 실제 앱 서버와 같은 안전 규칙
+(app_logic.ManualDrive, guard_speed)을 쓴다.
 """
 
 import argparse
 import math
 import os
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.join(HERE, '..', 'src', 'security_patrol')
 sys.path.insert(0, os.path.join(PKG, 'security_patrol'))
-from app_logic import ObjectBoard, build_state, encode_map, scan_to_points  # noqa: E402
+from app_logic import ManualDrive, ObjectBoard, build_state, encode_map, guard_speed, scan_to_points  # noqa: E402
 from web_server import WebServer  # noqa: E402
 
 # 가짜 방: 6 × 4 m 벽 + 가운데 상자 + 칸막이 (선분 목록)
@@ -70,23 +73,49 @@ def dist_to_segment(px, py, a, b):
     return math.hypot(px - (x1 + t * ex), py - (y1 + t * ey))
 
 
+def fake_scan(rx, ry, ryaw, people, step):
+    ranges = []
+    for i in range(720):
+        ang = -math.pi + i * (2 * math.pi / 720)
+        r = ray(rx, ry, ryaw + ang, WALLS, people)
+        ranges.append(r if r <= 8.0 else math.inf)
+    return scan_to_points(ranges, -math.pi, 2 * math.pi / 720, 0.15, 8.0, step=step)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--patrol', action='store_true', help='로봇이 혼자 순찰 (수동 주행 잠김)')
     args = ap.parse_args()
     map_msg = make_map()
+    drive, lock = ManualDrive(max_linear=0.3, max_angular=1.2), threading.Lock()
+
+    def on_message(cid, msg):                       # 웹 서버 스레드
+        kind = msg.get('type')
+        with lock:
+            if kind == 'disconnected':
+                drive.disconnect(cid)
+            elif kind == 'stop':
+                drive.stop()
+            elif kind == 'drive' and not args.patrol:
+                drive.command(cid, msg.get('lin'), msg.get('ang'), time.monotonic())
+        if kind != 'drive':
+            print(f'앱 #{cid} → {msg}')
+
+    def on_connect(cid):
+        web.send_to(cid, {'type': 'hello', 'id': cid})
+        web.send_to(cid, map_msg)
+
     web = WebServer(os.path.join(PKG, 'web'), host='127.0.0.1', port=args.port,
-                    on_message=lambda cid, m: print(f'앱 #{cid} → {m}'),
-                    on_connect=lambda cid: web.send_to(cid, map_msg)).start_in_thread()
+                    on_message=on_message, on_connect=on_connect).start_in_thread()
     print(f'미리보기: http://localhost:{web.port}  (Ctrl+C 로 종료)')
     board = ObjectBoard()
     route = ['출발점', '북쪽', '동쪽', '남쪽']
+    rx, ry, ryaw = -2.0, 0.3, 0.0                   # 수동 주행 시작 위치
+    blocked, dt, n = None, 0.1, 0
     t0 = time.time()
     while True:
         t = time.time() - t0
-        # 로봇: 방 안에서 타원을 그리며 순찰
-        a = t * 0.25
-        rx, ry, ryaw = -0.5 + 1.6 * math.cos(a), -0.2 + 1.1 * math.sin(a), a + math.pi / 2
         # 사람: 10초 뒤 들어와서 천천히 걸음 (다리 두 개)
         people = []
         if t > 10:
@@ -94,17 +123,32 @@ def main():
             people = [(px, py + 0.1, 0.06), (px, py - 0.1, 0.06)]
             board.update({'event': 'moving' if t > 16 else 'detected', 'id': 1, 'x': px, 'y': py,
                           'width': 0.3, 'size': 'medium', 'moving': t > 16, 'person': t > 13}, t)
-        ranges = []
-        for i in range(720):
-            ang = -math.pi + i * (2 * math.pi / 720)
-            r = ray(rx, ry, ryaw + ang, WALLS, people)
-            ranges.append(r if r <= 8.0 else math.inf)
-        points = scan_to_points(ranges, -math.pi, 2 * math.pi / 720, 0.15, 8.0)
-        idx = int(t / 8) % len(route)
-        patrol = {'state': 'watching' if (t % 8) > 6 else 'moving', 'lap': int(t / 32) + 1, 'index': idx,
-                  'name': route[idx]}
-        web.broadcast(build_state((rx, ry, ryaw), points, 7.38, -54, patrol, board.snapshot(t), True, t))
-        time.sleep(0.2)
+        patrol = None
+        if args.patrol:                             # 방 안에서 타원을 그리며 순찰
+            a = t * 0.25
+            rx, ry, ryaw = -0.5 + 1.6 * math.cos(a), -0.2 + 1.1 * math.sin(a), a + math.pi / 2
+            idx = int(t / 8) % len(route)
+            patrol = {'state': 'watching' if (t % 8) > 6 else 'moving', 'lap': int(t / 32) + 1,
+                      'index': idx, 'name': route[idx]}
+        else:                                       # 조이스틱 명령대로 움직임 (서버와 같은 규칙)
+            with lock:
+                out = drive.step(time.monotonic())
+            blocked = None
+            if out is not None:
+                v, w = out
+                v, blocked = guard_speed(v, fake_scan(rx, ry, ryaw, people, 1))
+                nyaw = ryaw + w * dt
+                nx, ny = rx + v * math.cos(nyaw) * dt, ry + v * math.sin(nyaw) * dt
+                if all(dist_to_segment(nx, ny, *wall) > 0.12 for wall in WALLS):
+                    rx, ry, ryaw = nx, ny, nyaw
+        n += 1
+        if n % 2 == 0:                              # 상태는 5 Hz
+            with lock:
+                manual = drive.snapshot()
+            manual['blocked'] = blocked
+            web.broadcast(build_state((rx, ry, ryaw), fake_scan(rx, ry, ryaw, people, 2), 7.38, -54, patrol,
+                                      board.snapshot(t), True, t, manual=manual, patrol_running=args.patrol))
+        time.sleep(dt)
 
 
 if __name__ == '__main__':

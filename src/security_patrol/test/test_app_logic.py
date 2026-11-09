@@ -7,7 +7,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'security_patrol'))
-from app_logic import ObjectBoard, build_state, encode_map, scan_to_points, yaw_from_quaternion  # noqa: E402
+from app_logic import (ManualDrive, ObjectBoard, build_state, encode_map, guard_speed,  # noqa: E402
+                       scan_to_points, yaw_from_quaternion)
 
 
 class AppLogicTest(unittest.TestCase):
@@ -50,6 +51,70 @@ class AppLogicTest(unittest.TestCase):
     def test_build_state_without_pose(self):
         s = build_state(None, [], None, None, None, [], False, 12.345)
         self.assertEqual((s['type'], s['robot'], s['localized'], s['t']), ('state', None, False, 12.35))
+
+
+class ManualDriveTest(unittest.TestCase):
+
+    def setUp(self):
+        self.d = ManualDrive(max_linear=0.2, max_angular=1.0, timeout=0.5, stop_ticks=3)
+
+    def test_scales_and_clamps_app_values(self):
+        self.assertIsNone(self.d.command(1, 0.5, -3.0, 0.0))     # 앱이 범위 밖 값을 보내도 최대값으로 자른다
+        self.assertEqual(self.d.step(0.1), (0.1, -1.0))
+
+    def test_rejects_garbage(self):
+        self.assertEqual(self.d.command(1, 'fast', 0, 0.0), 'bad')
+        self.assertEqual(self.d.command(1, float('nan'), 0, 0.0), 'bad')
+        self.assertIsNone(self.d.owner)
+        self.assertIsNone(self.d.step(0.1))                       # 아무 명령도 안 나감
+
+    def test_one_driver_at_a_time(self):
+        self.d.command(1, 1.0, 0.0, 0.0)
+        self.assertEqual(self.d.command(2, -1.0, 0.0, 0.1), 'busy')
+        self.assertEqual(self.d.step(0.1), (0.2, 0.0))
+        self.d.stop()                                             # 정지 후에는 다른 화면이 잡을 수 있다
+        self.assertIsNone(self.d.command(2, -1.0, 0.0, 0.2))
+        self.assertEqual(self.d.owner, 2)
+
+    def test_timeout_stops_then_goes_quiet(self):
+        self.d.command(1, 1.0, 0.0, 0.0)
+        self.assertEqual(self.d.step(0.4), (0.2, 0.0))
+        out = [self.d.step(0.6 + i * 0.1) for i in range(5)]     # 0.5초 넘게 명령 없음
+        self.assertEqual(out, [(0.0, 0.0)] * 3 + [None, None])   # 0 을 3번 보내고 조용해진다
+        self.assertEqual(self.d.reason, 'timeout')
+        self.assertIsNone(self.d.owner)
+
+    def test_disconnect_only_stops_own_driver(self):
+        self.d.command(1, 1.0, 0.0, 0.0)
+        self.d.disconnect(2)
+        self.assertEqual(self.d.owner, 1)
+        self.d.disconnect(1)
+        self.assertEqual((self.d.owner, self.d.reason, self.d.step(0.1)), (None, 'disconnected', (0.0, 0.0)))
+
+    def test_idle_stop_sends_nothing(self):
+        self.d.stop()                                             # 움직이지 않을 때 정지를 눌러도 0 을 보내지 않는다
+        self.assertIsNone(self.d.step(0.0))
+
+
+class GuardTest(unittest.TestCase):
+
+    def test_blocks_forward_only_when_front_is_close(self):
+        pts = [[0.25, 0.0]]                                       # 차체 앞(0.13) 12 cm 앞에 물체
+        self.assertEqual(guard_speed(0.1, pts), (0.0, 'front'))
+        self.assertEqual(guard_speed(-0.1, pts), (-0.1, None))    # 뒤로는 갈 수 있다
+        self.assertEqual(guard_speed(0.0, pts), (0.0, None))
+
+    def test_blocks_backward(self):
+        self.assertEqual(guard_speed(-0.1, [[-0.2, 0.05]]), (0.0, 'back'))
+
+    def test_ignores_side_far_and_self_points(self):
+        pts = [[0.2, 0.3],        # 옆으로 비켜 있음
+               [0.5, 0.0],        # 충분히 멀다
+               [0.05, 0.0]]       # 차체 안쪽 = 라이다가 자기 몸을 본 것
+        self.assertEqual(guard_speed(0.1, pts), (0.1, None))
+
+    def test_can_be_turned_off(self):
+        self.assertEqual(guard_speed(0.1, [[0.2, 0.0]], gap=0.0), (0.1, None))
 
 
 if __name__ == '__main__':
