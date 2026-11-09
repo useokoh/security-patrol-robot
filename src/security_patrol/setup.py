@@ -19,6 +19,7 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'maps'), glob('maps/*.yaml') + glob('maps/*.pgm')),
         (os.path.join('share', package_name, 'models'), glob('models/*.sdf')),
+        (os.path.join('share', package_name, 'web'), glob('web/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -43,6 +44,7 @@ setup(
             'robot_bridge = security_patrol.robot_bridge:main',
             'route_recorder = security_patrol.route_recorder:main',
             'wheel_check = security_patrol.wheel_check:main',
+            'app_server = security_patrol.app_server:main',
         ],
     },
 )

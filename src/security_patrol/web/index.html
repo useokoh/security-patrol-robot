@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>SENTINEL 관제</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <!-- 상단: 연결 · 배터리 · Wi-Fi · 위치추정 -->
+  <header class="top">
+    <div class="brand">SENTINEL</div>
+    <div class="chips">
+      <span class="chip" id="conn"><i class="dot"></i><b>연결 중</b></span>
+      <span class="chip" id="battery">배터리 <b>-</b></span>
+      <span class="chip" id="wifi">Wi-Fi <b>-</b></span>
+      <span class="chip" id="loc">위치 <b>-</b></span>
+    </div>
+  </header>
+
+  <!-- 가운데: 레이더 / 지도 화면 -->
+  <main class="view">
+    <canvas id="canvas"></canvas>
+    <div class="view-tools">
+      <div class="seg" id="viewMode">
+        <button data-mode="radar" class="on">레이더</button>
+        <button data-mode="map">지도</button>
+      </div>
+      <div class="zoom">
+        <button id="zoomOut" aria-label="축소">−</button>
+        <span id="zoomLabel">4 m</span>
+        <button id="zoomIn" aria-label="확대">+</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="lg scan"></i>라이다</span>
+      <span><i class="lg robot"></i>로봇</span>
+      <span><i class="lg caution"></i>주의</span>
+      <span><i class="lg urgent"></i>긴급</span>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+  </main>
+
+  <!-- 아래: 순찰 상태 + 수동/자동 -->
+  <section class="panel">
+    <div class="patrol" id="patrol">순찰 정보 없음</div>
+    <div class="tabs" id="tabs">
+      <button data-tab="manual" class="on">수동 주행</button>
+      <button data-tab="auto">자동 주행</button>
+    </div>
+    <div class="tab-body" data-body="manual">
+      <p class="soon">조이스틱 수동 주행은 다음 단계(2단계)에서 추가됩니다.</p>
+    </div>
+    <div class="tab-body" data-body="auto" hidden>
+      <p class="soon">코스 선택과 자동 순찰은 3단계에서 추가됩니다.</p>
+    </div>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

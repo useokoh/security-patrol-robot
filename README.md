@@ -195,6 +195,25 @@ agent 는 가상머신 안에서 돌기 때문에, 맥이 로봇 패킷을 가�
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).
 
+## 관제 앱 (만드는 중: 1단계 레이더 화면)
+
+휴대폰·노트북 브라우저로 로봇을 보는 웹 앱입니다. 설치가 필요 없고, 가상머신의 `app_server` 노드가 화면 파일과 실시간 데이터를 함께 보냅니다.
+
+- 레이더 화면: 로봇 중심, 앞쪽이 위. 라이다 점, 지도 벽, 감지된 물체(사람 후보는 빨강)를 겹쳐 보여 줍니다.
+- 지도 화면: 전체 지도 위 로봇 위치. 손가락·마우스로 끌어서 이동, +/- 로 확대.
+- 위쪽: 연결 상태, 배터리, Wi-Fi 세기, 위치추정 상태. 아래쪽: 순찰 상태.
+- 수동 주행(조이스틱)과 코스 선택·자동 순찰은 다음 단계에서 추가합니다.
+
+```bash
+# 터미널 1: 시뮬레이션 + Nav2 (또는 실제 로봇이면 real_nav.launch.py)
+ros2 launch security_patrol nav.launch.py
+# 터미널 2: 앱 서버 (실제 로봇이면 use_sim_time 을 빼고 실행)
+ros2 run security_patrol app_server --ros-args -p use_sim_time:=true
+```
+
+맥 브라우저에서 `http://192.168.64.2:8080` (가상머신 주소) 을 엽니다.
+ROS 없이 화면만 보려면 맥에서 `python3 tools/app_preview.py` 를 실행하고 `http://localhost:8765` 를 엽니다 (가짜 방·로봇·사람).
+
 ## 패키지 구조
 
 ```
@@ -220,5 +239,8 @@ src/security_patrol/
 ├── security_patrol/nav_test.py     # Nav2 자동 목표 주행 테스트
 ├── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
 ├── security_patrol/patrol_node.py  # 반복 순찰 노드
-└── security_patrol/anomaly_detector.py  # 지도 비교 이상 감지 노드
+├── security_patrol/anomaly_detector.py  # 지도 비교 이상 감지 노드
+├── security_patrol/app_server.py  # 관제 앱 서버 노드 (ROS 데이터 → 브라우저)
+├── security_patrol/web_server.py  # 정적 파일 + WebSocket 서버 (표준 라이브러리만)
+└── web/                           # 관제 앱 화면 (index.html, app.js, style.css)
 ```

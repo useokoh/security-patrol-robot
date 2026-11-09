@@ -1,0 +1,269 @@
+// SENTINEL 관제 앱 (1단계: 레이더 화면)
+// 서버(app_server)가 WebSocket(/ws)으로 지도(map)와 상태(state)를 보낸다.
+//   state.scan  : 로봇 기준 라이다 점 [[x, y], ...]  (x 앞, y 왼쪽, m)
+//   state.robot : 지도 기준 로봇 위치 {x, y, yaw}  (위치추정 전에는 null)
+'use strict';
+
+const COLORS = {
+  unknown: [11, 18, 32], free: [24, 36, 60], wall: [104, 124, 160],
+  scan: '#5fd0ff', robot: '#34d399', caution: '#f5a524', urgent: '#f87171', ring: 'rgba(95, 208, 255, 0.18)',
+};
+const RADAR_RANGES = [1, 2, 4, 8];          // 레이더 화면 반지름 단계 [m]
+
+const state = {
+  map: null, mapImage: null, last: null, lastAt: 0, connected: false,
+  mode: 'radar', radarIndex: 2, mapZoom: 1, pan: { x: 0, y: 0 },
+};
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const $ = (id) => document.getElementById(id);
+
+// ---------- 연결 ----------
+
+let socket = null;
+function connect() {
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  socket.onopen = () => { state.connected = true; };
+  socket.onclose = () => { state.connected = false; setTimeout(connect, 2000); };
+  socket.onerror = () => socket.close();
+  socket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'map') setMap(msg);
+    else if (msg.type === 'state') { state.last = msg; state.lastAt = performance.now(); }
+  };
+}
+
+function send(msg) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+}
+
+// 지도(OccupancyGrid)를 화면용 그림으로 한 번만 만들어 둔다
+function setMap(msg) {
+  const raw = atob(msg.data);
+  const img = new ImageData(msg.width, msg.height);
+  for (let i = 0; i < raw.length; i++) {
+    const v = raw.charCodeAt(i);
+    let c;
+    if (v === 255) c = COLORS.unknown;
+    else {
+      const t = Math.min(v, 100) / 100;          // 0 빈칸 ~ 1 벽
+      c = COLORS.free.map((f, k) => Math.round(f + (COLORS.wall[k] - f) * t));
+    }
+    img.data.set([c[0], c[1], c[2], 255], i * 4);
+  }
+  const off = document.createElement('canvas');
+  off.width = msg.width; off.height = msg.height;
+  off.getContext('2d').putImageData(img, 0, 0);
+  state.map = msg; state.mapImage = off;
+}
+
+// ---------- 그리기 ----------
+
+function resize() {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
+}
+
+function drawMapImage() {
+  if (!state.mapImage) return;
+  const m = state.map, res = m.resolution;
+  ctx.save();
+  ctx.translate(m.origin[0], m.origin[1]);
+  ctx.rotate(m.origin[2]);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(state.mapImage, 0, 0, m.width * res, m.height * res);
+  ctx.restore();
+}
+
+// 로봇 기준 좌표계에서 그리기: 라이다 점과 로봇 모양
+function drawScan(points, size) {
+  ctx.fillStyle = COLORS.scan;
+  for (const [x, y] of points) ctx.fillRect(x - size / 2, y - size / 2, size, size);
+}
+
+function drawRobot(px) {
+  // 로봇 외곽 약 0.26 x 0.20 m, 앞쪽 화살표. 축소해도 화면에서 18픽셀보다 작아지지 않게 키운다
+  const sc = Math.max(1, (18 * (window.devicePixelRatio || 1) * px) / 0.26);
+  ctx.save();
+  ctx.scale(sc, sc);
+  ctx.fillStyle = 'rgba(52, 211, 153, 0.25)';
+  ctx.strokeStyle = COLORS.robot;
+  ctx.lineWidth = (2 * px) / sc;
+  ctx.beginPath(); ctx.rect(-0.13, -0.10, 0.26, 0.20); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0.20, 0); ctx.lineTo(0.06, 0.07); ctx.lineTo(0.06, -0.07); ctx.closePath();
+  ctx.fillStyle = COLORS.robot; ctx.fill();
+  ctx.restore();
+}
+
+// 지도 기준 좌표계에서 그리기: 감지 물체
+function drawObjects(objects, px, labels) {
+  for (const o of objects || []) {
+    if (o.x === undefined) continue;
+    const color = o.moving ? COLORS.urgent : COLORS.caution;
+    const r = Math.max((o.width || 0.2) / 2, 0.12);
+    ctx.globalAlpha = o.visible ? 1 : 0.35;
+    ctx.fillStyle = color + '55'; ctx.strokeStyle = color; ctx.lineWidth = 2 * px;
+    ctx.setLineDash(o.visible ? [] : [6 * px, 4 * px]);
+    ctx.beginPath(); ctx.arc(o.x, o.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    labels.push({ x: o.x, y: o.y + r, text: `#${o.id}${o.person ? ' 사람 후보' : ''}`, color });
+  }
+}
+
+function drawLabels(labels, toScreen) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = `${12 * (window.devicePixelRatio || 1)}px -apple-system, sans-serif`;
+  ctx.textAlign = 'center';
+  for (const l of labels) {
+    const [sx, sy] = toScreen(l.x, l.y);
+    ctx.fillStyle = l.color; ctx.fillText(l.text, sx, sy - 6 * (window.devicePixelRatio || 1));
+  }
+}
+
+// 한 번 그리다 오류가 나도 다음 화면은 계속 그린다
+function render() {
+  try {
+    const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    if (Math.round(r.width * dpr) !== canvas.width || Math.round(r.height * dpr) !== canvas.height) resize();
+    if (canvas.width > 80 && canvas.height > 80) draw();
+    updateStatus();
+  } catch (e) {
+    console.error(e);
+  }
+  requestAnimationFrame(render);
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height, dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const s = state.last, robot = s && s.robot;
+  const labels = [];
+
+  if (state.mode === 'radar') {
+    // 로봇 중심, 로봇 앞쪽이 화면 위. 화면 = (cx - y*k, cy - x*k)
+    const range = RADAR_RANGES[state.radarIndex], cx = W / 2, cy = H / 2;
+    const k = (Math.min(W, H) / 2 - 16 * dpr) / range, px = 1 / k;
+    // 거리 링
+    ctx.strokeStyle = COLORS.ring; ctx.lineWidth = dpr; ctx.font = `${11 * dpr}px sans-serif`;
+    ctx.fillStyle = 'rgba(143, 161, 194, 0.8)'; ctx.textAlign = 'left';
+    const stepM = range <= 2 ? 0.5 : range <= 4 ? 1 : 2;
+    for (let m = stepM; m <= range + 1e-6; m += stepM) {
+      ctx.beginPath(); ctx.arc(cx, cy, m * k, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillText(`${m} m`, cx + 4 * dpr, cy - m * k - 3 * dpr);
+    }
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+
+    ctx.setTransform(0, -k, -k, 0, cx, cy);          // 로봇 기준 좌표계
+    if (robot && state.mapImage) {                   // 지도도 로봇 기준으로 돌려서 흐리게
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.rotate(-robot.yaw); ctx.translate(-robot.x, -robot.y);
+      drawMapImage();
+      ctx.globalAlpha = 1;
+      drawObjects(s.objects, px, labels);
+      ctx.restore();
+    }
+    if (s) drawScan(s.scan, 3 * dpr * px);
+    drawRobot(px);
+    const toScreen = (x, y) => {                     // 지도 좌표 → 화면 (라벨용)
+      const dx = x - robot.x, dy = y - robot.y, c = Math.cos(-robot.yaw), n = Math.sin(-robot.yaw);
+      const rx = c * dx - n * dy, ry = n * dx + c * dy;
+      return [cx - ry * k, cy - rx * k];
+    };
+    if (robot) drawLabels(labels, toScreen);
+    $('zoomLabel').textContent = `${range} m`;
+  } else {
+    // 지도 화면: 지도 전체가 보이게 맞춘 뒤 확대·이동
+    const m = state.map;
+    let vx = 0, vy = 0, k = 60 * dpr;
+    if (m) {
+      const w = m.width * m.resolution, h = m.height * m.resolution;
+      vx = m.origin[0] + w / 2; vy = m.origin[1] + h / 2;
+      k = Math.min(W / (w + 0.6), H / (h + 0.6));
+    } else if (robot) { vx = robot.x; vy = robot.y; }
+    k *= state.mapZoom; vx -= state.pan.x; vy -= state.pan.y;
+    const px = 1 / k;
+    ctx.setTransform(k, 0, 0, -k, W / 2 - vx * k, H / 2 + vy * k);
+    drawMapImage();
+    drawObjects(s && s.objects, px, labels);
+    if (robot) {
+      ctx.save(); ctx.translate(robot.x, robot.y); ctx.rotate(robot.yaw);
+      drawScan(s.scan, 3 * dpr * px);
+      drawRobot(px);
+      ctx.restore();
+    }
+    drawLabels(labels, (x, y) => [W / 2 + (x - vx) * k, H / 2 - (y - vy) * k]);
+    $('zoomLabel').textContent = `×${state.mapZoom.toFixed(1)}`;
+  }
+}
+
+// ---------- 상태 글자 ----------
+
+const PATROL_STATES = { moving: '이동 중', watching: '감시 중', skipped: '건너뜀', stopped: '정지' };
+
+function setChip(id, text, cls) {
+  const el = $(id);
+  el.querySelector('b').textContent = text;
+  el.classList.remove('ok', 'bad', 'warn');
+  if (cls) el.classList.add(cls);
+}
+
+function updateStatus() {
+  const s = state.last, fresh = s && performance.now() - state.lastAt < 2000;
+  setChip('conn', !state.connected ? '연결 끊김' : fresh ? '연결됨' : '데이터 없음', state.connected && fresh ? 'ok' : 'bad');
+  setChip('battery', s && s.battery != null ? `${s.battery.toFixed(2)} V` : '-', s && s.battery != null && s.battery < 7.0 ? 'warn' : '');
+  setChip('wifi', s && s.rssi != null ? `${s.rssi} dBm` : '-', s && s.rssi != null && s.rssi < -75 ? 'warn' : '');
+  setChip('loc', s ? (s.localized ? '추정 중' : '모름') : '-', s && !s.localized ? 'warn' : '');
+
+  const banner = $('banner');
+  let warn = '';
+  if (state.connected && !fresh) warn = '로봇 데이터가 오지 않습니다';
+  else if (s && s.scan.length === 0) warn = '라이다 데이터 없음';
+  else if (state.mode === 'map' && s && !s.localized) warn = '위치추정 전이라 지도 위 로봇 위치를 모릅니다';
+  banner.hidden = !warn; banner.textContent = warn;
+
+  const p = s && s.patrol;
+  $('patrol').innerHTML = p
+    ? `순찰 <b>${PATROL_STATES[p.state] || p.state}</b> · ${p.lap}바퀴 · ${p.index + 1}번째 지점 <b>${p.name}</b>`
+    : '순찰 정보 없음 (순찰이 꺼져 있음)';
+}
+
+// ---------- 조작 ----------
+
+document.querySelectorAll('#viewMode button').forEach((b) => b.addEventListener('click', () => {
+  state.mode = b.dataset.mode;
+  document.querySelectorAll('#viewMode button').forEach((x) => x.classList.toggle('on', x === b));
+}));
+$('zoomIn').addEventListener('click', () => {
+  if (state.mode === 'radar') state.radarIndex = Math.max(0, state.radarIndex - 1);
+  else state.mapZoom = Math.min(8, state.mapZoom * 1.5);
+});
+$('zoomOut').addEventListener('click', () => {
+  if (state.mode === 'radar') state.radarIndex = Math.min(RADAR_RANGES.length - 1, state.radarIndex + 1);
+  else { state.mapZoom = Math.max(0.5, state.mapZoom / 1.5); if (state.mapZoom <= 1) state.pan = { x: 0, y: 0 }; }
+});
+document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tab-body').forEach((x) => { x.hidden = x.dataset.body !== b.dataset.tab; });
+}));
+
+// 지도 화면에서 끌어서 이동
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => { if (state.mode === 'map') drag = { x: e.clientX, y: e.clientY }; });
+window.addEventListener('pointerup', () => { drag = null; });
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag || !state.map) return;
+  const m = state.map, dpr = window.devicePixelRatio || 1;
+  const k = Math.min(canvas.width / (m.width * m.resolution + 0.6), canvas.height / (m.height * m.resolution + 0.6)) * state.mapZoom;
+  state.pan.x += (e.clientX - drag.x) * dpr / k;
+  state.pan.y -= (e.clientY - drag.y) * dpr / k;
+  drag = { x: e.clientX, y: e.clientY };
+});
+
+window.addEventListener('resize', resize);
+resize();
+connect();
+requestAnimationFrame(render);
+window.SENTINEL = { send };       // 다음 단계(수동·자동 주행)에서 쓴다
