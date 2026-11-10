@@ -45,6 +45,7 @@ setup(
             'route_recorder = security_patrol.route_recorder:main',
             'wheel_check = security_patrol.wheel_check:main',
             'app_server = security_patrol.app_server:main',
+            'explorer = security_patrol.explorer:main',
         ],
     },
 )
