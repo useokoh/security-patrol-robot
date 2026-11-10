@@ -97,6 +97,19 @@ class GoalTest(unittest.TestCase):
             visited.append(robot)
         self.assertEqual(len(seen), len(set(seen)))              # 같은 목표를 두 번 고르지 않는다
 
+    def test_max_radius_keeps_robot_near_home(self):
+        # 왼쪽 방에서 시작, 범위 2 m 면 3 m 밖 오른쪽 방 경계는 고르지 않는다
+        w, h, truth = two_rooms()
+        known = list(truth)
+        for r in range(h):                             # 오른쪽 방 안쪽 깊은 곳만 모름
+            for c in range(w):
+                if (c + 0.5) * RES > 4.5:
+                    known[r * w + c] = -1
+        near = choose_goal(w, h, RES, 0.0, 0.0, known, (1.0, 1.5), home=(1.0, 1.5), max_radius=2.0)
+        far = choose_goal(w, h, RES, 0.0, 0.0, known, (1.0, 1.5), home=(1.0, 1.5), max_radius=0.0)
+        self.assertIsNone(near['goal'])
+        self.assertIsNotNone(far['goal'])
+
     def test_unobservable_frontier_is_abandoned(self):
         # 약 0.7 m 좁은 방 안쪽 오른편에 모르는 띠: 벽에서 0.3 m 떨어진 관찰 지점은 가운데뿐이라
         # 가운데에 서 있는데도 경계가 남으면 볼 수 없는 경계로 보고 포기한다

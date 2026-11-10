@@ -51,6 +51,7 @@ class Explorer:
         self.course_file = os.path.expanduser(str(p('course_file', '').value))  # '' = 코스 안 만듦
         self.course_name = str(p('course_name', '탐사로 만든 코스').value)
         self.min_size = float(p('min_frontier', 0.3).value)          # 이보다 짧은 경계는 무시 [m]
+        self.max_radius = float(p('max_radius', 0.0).value)          # 출발점에서 이보다 먼 곳은 안 감 [m], 0 = 제한 없음
         self.map = None
         self.blacklist = []             # 못 간 곳·볼 수 없는 경계 (다시 고르지 않음)
         self.visited = []               # 가 본 관찰 지점 (두 곳 사이 왕복 방지)
@@ -131,14 +132,16 @@ class Explorer:
         log.info('Nav2 활성화 대기 중...')
         nav.waitUntilNav2Active(localizer='controller_server')
         home = self.pose()
-        log.info(f'탐사 시작 (출발점 {home[0]:+.2f}, {home[1]:+.2f})')
+        log.info(f'탐사 시작 (출발점 {home[0]:+.2f}, {home[1]:+.2f}'
+                 f'{f", 범위 {self.max_radius:.1f} m" if self.max_radius > 0 else ""})')
 
         while rclpy.ok() and self.stats['goals'] < self.max_goals:
             self.spin_for(0.5)                               # 최신 지도 받기
             robot = self.pose()
             if robot is None:
                 continue
-            pick = choose_goal(*self.map, robot[:2], self.blacklist, self.visited, min_size=self.min_size)
+            pick = choose_goal(*self.map, robot[:2], self.blacklist, self.visited, min_size=self.min_size,
+                               home=home[:2], max_radius=self.max_radius)
             if pick['abandon']:
                 self.blacklist += pick['abandon']
                 self.stats['abandoned'] += len(pick['abandon'])

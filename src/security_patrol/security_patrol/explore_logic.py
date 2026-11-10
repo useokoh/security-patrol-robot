@@ -15,7 +15,8 @@ ROS·numpy 없이 시험할 수 있다 (test/test_explore_logic.py). explorer �
      한 번 더 고른다. 이미 가 본 관찰 지점(visited)은 다시 고르지 않는다 (두 곳 사이 왕복 방지).
      그것도 없으면 볼 수 없는 경계(지도 밖 틈, 유리)로 보고 'abandon' 으로 돌려주며,
      부르는 쪽이 포기 목록에 넣는다. 포기하지 않으면 같은 자리를 계속 골라 탐사가 멈춘다 (맥 가짜 탐사에서 발견).
-  5. 고를 덩어리가 없으면 탐사 끝 (goal None).
+  5. max_radius 가 있으면 home 에서 그보다 먼 관찰 지점은 고르지 않는다 (실제 로봇: 열린 문으로 복도에 나가지 않게).
+  6. 고를 덩어리가 없으면 탐사 끝 (goal None).
 """
 
 import math
@@ -69,7 +70,7 @@ def known_area(data, resolution):
 
 def choose_goal(width, height, resolution, origin_x, origin_y, data, robot_xy, blacklist=(), visited=(),
                 robot_radius=0.25, goal_clearance=0.40, look_radius=0.8, min_size=0.3,
-                size_weight=1.0, blacklist_radius=0.5, min_move=0.25):
+                size_weight=1.0, blacklist_radius=0.5, min_move=0.25, home=None, max_radius=0.0):
     """다음 탐사 목표.
 
     돌려주는 값: {'goal': (x, y) 또는 None(탐사 끝), 'look': (x, y) 덩어리 가운데 (도착 방향),
@@ -131,6 +132,8 @@ def choose_goal(width, height, resolution, origin_x, origin_y, data, robot_xy, b
         x, y = m.xy_of(goal)
         if any(math.hypot(x - bx, y - by) < blacklist_radius for bx, by in list(blacklist) + abandon):
             continue
+        if max_radius > 0 and home is not None and math.hypot(x - home[0], y - home[1]) > max_radius:
+            continue                              # 탐사 범위 밖
         size = len(group) * res
         score = dist[goal] - size_weight * size
         if best is None or score < best[0]:

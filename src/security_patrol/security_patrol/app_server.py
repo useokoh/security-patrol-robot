@@ -232,6 +232,10 @@ class AppServer(Node):
             from_explore = self.modes.snapshot()['mode'] == 'explore'
             last_pose = self.robot_pose
             self.modes.stop()
+            # Nav2 를 끈 뒤 마지막 속도 명령이 로봇에 남지 않게 0 을 몇 번 보낸다 (펌웨어 끊김 정지 여부를 모름)
+            for _ in range(3):
+                self.cmd_pub.publish(Twist())
+                time.sleep(0.1)
             # 지난 모드의 지도·물체·순찰 정보를 지운다 (새 모드가 새 지도를 보낸다)
             self.map_msg = self.map_raw = None
             self.board = ObjectBoard()

@@ -42,7 +42,9 @@ def setup(context):
                               'autostart': 'true'}.items())]),
         Node(package='security_patrol', executable='explorer', name='explorer', output='screen',
              parameters=[{'use_sim_time': sim, 'save_map': save_map, 'course_file': course,
-                          'return_home': True, 'goal_timeout': 60.0 if sim else 90.0}]),
+                          'return_home': True, 'goal_timeout': 60.0 if sim else 90.0,
+                          # 실제 로봇: 출발점(방 가운데)에서 3 m 밖은 가지 않는다 (열린 문으로 복도에 나가지 않게)
+                          'max_radius': 0.0 if sim else 3.0}]),
         Node(package='rviz2', executable='rviz2', name='rviz2', output='screen',
              arguments=['-d', os.path.join(pkg_share, 'rviz', 'slam_view.rviz')],
              parameters=[{'use_sim_time': sim}], condition=IfCondition(LaunchConfiguration('rviz'))),
