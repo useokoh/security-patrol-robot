@@ -107,7 +107,7 @@ class GoalTest(unittest.TestCase):
                 x = (c + 0.5) * RES
                 edge = c == 0 or r == 0 or c == w - 1 or r == h - 1
                 data.append(100 if edge else -1 if 0.55 <= x <= 0.6 else 0)
-        pick = choose_goal(w, h, RES, 0.0, 0.0, data, (0.4, 0.4))
+        pick = choose_goal(w, h, RES, 0.0, 0.0, data, (0.4, 0.4), robot_radius=0.17, goal_clearance=0.30)
         self.assertIsNone(pick['goal'])
         self.assertGreaterEqual(len(pick['abandon']), 1)
 

@@ -669,6 +669,9 @@ function updateMapTab(s, fresh) {
       + `<div class="stat"><b>${ex.state === 'done' ? '끝' : (ex.frontiers != null ? ex.frontiers + '개' : '-')}</b>`
       + `<span>${ex.state === 'done' ? `${mins}분 ${secs}초` : '남은 경계'}</span></div>`;
   }
+  if (md.mode === 'explore' && ex.state === 'done' && ex.home_ok === false) {
+    $('modeLine').innerHTML += '<br><span class="warn-text">출발점으로 돌아오지 못했습니다. 새 지도로 바꾸면 지금 위치로 위치추정을 맞춥니다</span>';
+  }
   $('mapHint').hidden = md.mode === 'explore';
 
   if (key === mapActionsKey) return;

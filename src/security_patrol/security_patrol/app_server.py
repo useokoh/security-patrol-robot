@@ -19,13 +19,14 @@
 
 import datetime
 import json
+import math
 import os
 import threading
 import time
 
 import rclpy
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
@@ -96,6 +97,9 @@ class AppServer(Node):
         self.modes = ModeRunner(log=self.get_logger().info)
         self.mode_busy = False          # 모드를 바꾸는 중 (끄고 켜는 데 수십 초)
         self.explore = None             # /explore/status 마지막 값
+        # 탐사 지도로 순찰 모드를 켤 때 AMCL 처음 위치를 '탐사가 끝난 위치'로 맞춘다 (출발점 복귀 실패 대비)
+        self.pending_pose = None        # {'pose', 'deadline', 'last', 'sent_at'}
+        self.amcl_pose = None           # (x, y, 받은 시각)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -117,6 +121,8 @@ class AppServer(Node):
         self.create_subscription(Float32, 'battery_voltage', lambda m: setattr(self, 'battery', m.data), 10)
         self.create_subscription(Int32, 'rssi_strength', lambda m: setattr(self, 'rssi', m.data), 10)
         self.create_subscription(String, 'explore/status', self.on_explore, 10)
+        self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self.on_amcl_pose, 10)
+        self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
         self.web = WebServer(web_dir, port=port, on_message=self.on_app_message,
@@ -163,6 +169,42 @@ class AppServer(Node):
             self.refresh_courses()
             self.web.broadcast({'type': 'courses', 'courses': self.courses})
 
+    def on_amcl_pose(self, msg):
+        p = msg.pose.pose.position
+        self.amcl_pose = (p.x, p.y, time.monotonic())
+
+    def send_initial_pose(self):
+        """tick 에서 부른다. AMCL 이 켜져 받아들일 때까지 2초마다 보내고, AMCL 위치가 맞으면 멈춘다."""
+        pend = self.pending_pose
+        if pend is None:
+            return
+        now = time.monotonic()
+        x, y, yaw = pend['pose']
+        if pend['sent_at'] is not None and self.amcl_pose and self.amcl_pose[2] > pend['sent_at'] \
+                and math.hypot(self.amcl_pose[0] - x, self.amcl_pose[1] - y) < 0.3:
+            self.get_logger().info(f'위치추정을 탐사가 끝난 위치로 맞춤 ({x:+.2f}, {y:+.2f})')
+            self.pending_pose = None
+            return
+        if now > pend['deadline']:
+            self.get_logger().warn('위치추정 처음 위치를 맞추지 못함 (AMCL 응답 없음). RViz 2D Pose Estimate 로 맞추세요')
+            self.pending_pose = None
+            return
+        if now - pend['last'] < 2.0 or self.count_subscribers('initialpose') == 0:
+            return
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x, msg.pose.pose.position.y = float(x), float(y)
+        msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        cov = [0.0] * 36
+        cov[0] = cov[7] = 0.05                          # x, y 분산 [m²]
+        cov[35] = 0.07                                  # yaw 분산 [rad²]
+        msg.pose.covariance = cov
+        self.initial_pose_pub.publish(msg)
+        pend['last'] = now
+        if pend['sent_at'] is None:
+            pend['sent_at'] = now
+
     # ---------- 모드 (순찰 / 지도 만들기) ----------
 
     def mode_command(self, mode, map_file=None):
@@ -186,6 +228,9 @@ class AppServer(Node):
             with self.drive_lock:                      # 바꾸는 동안 아무것도 로봇을 움직이지 않게
                 self.drive.stop('mode')
             self.runner.stop(wait=True)
+            # 탐사 모드에서 탐사 지도로 바꿀 때: 끄기 전 SLAM 기준 로봇 위치를 기억 (탐사 지도와 같은 좌표)
+            from_explore = self.modes.snapshot()['mode'] == 'explore'
+            last_pose = self.robot_pose
             self.modes.stop()
             # 지난 모드의 지도·물체·순찰 정보를 지운다 (새 모드가 새 지도를 보낸다)
             self.map_msg = self.map_raw = None
@@ -194,6 +239,10 @@ class AppServer(Node):
             if mode == 'patrol':
                 self.map_file = map_file or self.default_map
             ok = self.modes.start(mode, self.mode_command(mode, self.map_file), {'map': self.map_file})
+            if ok and mode == 'patrol' and from_explore and last_pose is not None \
+                    and self.map_file == self.explored_map + '.yaml':
+                self.pending_pose = {'pose': last_pose, 'deadline': time.monotonic() + 90.0, 'last': 0.0,
+                                     'sent_at': None}
             text = ({'patrol': f'순찰 모드 (지도 {os.path.basename(self.map_file)})',
                      'explore': '지도 만들기 모드 (자율 탐사)'}[mode] + (' 시작' if ok else ' 실행 실패'))
             log.info(text)
@@ -433,14 +482,16 @@ class AppServer(Node):
         self.patrol_running = self.runner.running() or self.count_publishers('patrol/status') > 0
         mode = self.mode_state()
         self.exploring = mode['exploring']
-        if self.web.client_count() == 0:
-            return
-        points = self.scan_points(self.scan_step)
+        self.send_initial_pose()
+        # 로봇 위치는 앱이 없어도 갱신한다 (모드를 바꿀 때 탐사가 끝난 위치를 기억해야 한다)
         try:
             robot, localized = self.lookup(self.map_frame, self.base_frame), True
             self.robot_pose = robot
         except TransformException:
             robot, localized = None, False
+        if self.web.client_count() == 0:
+            return
+        points = self.scan_points(self.scan_step)
         now = self.now()
         with self.drive_lock:
             manual = self.drive.snapshot()

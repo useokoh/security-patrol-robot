@@ -164,14 +164,21 @@ class Explorer:
         area = known_area(self.map[5], self.map[2])
         log.info(f'=== 탐사 끝: 목표 {self.stats["goals"]}개 (실패 {self.stats["failed"]}, 포기 {self.stats["abandoned"]}), '
                  f'아는 빈 공간 {area:.1f} m², {time.time() - self.stats["started"]:.0f}초 ===')
+        home_ok = None
         if self.return_home:
+            # 좁은 곳에서 끝나면 한 번에 못 나올 수 있다 → 세 번까지 (사이에 Nav2 복구 동작이 돈다)
             self.publish('returning')
-            log.info('출발점으로 돌아가는 중...')
-            self.go(home[0], home[1], home[2])
+            for attempt in range(1, 4):
+                log.info(f'출발점으로 돌아가는 중... ({attempt}/3)')
+                home_ok = self.go(home[0], home[1], home[2]) == 'ok'
+                if home_ok:
+                    break
+            if not home_ok:
+                log.warn('!!! 출발점으로 돌아오지 못함. 순찰 모드로 바꿀 때 앱 서버가 지금 위치로 위치추정을 맞춘다')
         self.spin_for(1.0)
         map_file = self.save_map_file()
         course_file = self.save_course(home)
-        self.publish('done', map_file=map_file, course_file=course_file)
+        self.publish('done', map_file=map_file, course_file=course_file, home_ok=home_ok)
 
     def save_map_file(self):
         if not self.save_map:

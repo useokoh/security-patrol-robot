@@ -4,8 +4,10 @@ ROS·numpy 없이 시험할 수 있다 (test/test_explore_logic.py). explorer �
 
   1. 프런티어 칸 = 빈칸 중 상하좌우에 모르는 칸(-1)이 있는 칸. 8방향으로 이어진 것끼리 덩어리로 묶고,
      min_size 보다 작은 덩어리(라이다 잡음, 틈)는 버린다.
-  2. 관찰 지점 = 덩어리 근처(look_radius 안)의 아는 빈칸 중, 벽에서 goal_clearance 이상 떨어지고
-     로봇이 아는 빈칸만 지나 갈 수 있는 곳. 그중 로봇에서 가장 가까운 곳.
+  2. 관찰 지점 = 덩어리 근처(look_radius 안)의 아는 빈칸 중, 벽에서 goal_clearance(0.4 m) 이상 떨어지고
+     로봇이 벽에서 robot_radius(0.25 m) 이상 떨어진 아는 빈칸만 지나 갈 수 있는 곳. 그중 로봇에서 가장 가까운 곳.
+     (VM 시험에서 0.17 m 로 두었더니 캐비닛-벽 틈으로 들어가 Nav2 가 빠져나오지 못했다. Nav2 는 벽에서
+      0.3 m 까지를 위험 구역으로 본다. 좁은 틈은 들어가지 않고 밖에서 라이다로 본다)
      (모르는 칸 위를 목표로 주면 Nav2 가 벽 속을 목표로 받을 수 있어서, 이미 아는 곳에서 바라보게 한다)
   3. 점수 = 이동 거리 - size_weight x 덩어리 길이 → 가깝고 큰 경계부터. 실패했던 곳 근처는 건너뛴다.
   4. 가장 가까운 관찰 지점이 로봇이 서 있는 자리(min_move 안)이거나 이미 가 본 자리라면, 거기서는 그 경계가 안 보인다는 뜻이다
@@ -66,7 +68,7 @@ def known_area(data, resolution):
 
 
 def choose_goal(width, height, resolution, origin_x, origin_y, data, robot_xy, blacklist=(), visited=(),
-                robot_radius=0.17, goal_clearance=0.30, look_radius=0.8, min_size=0.3,
+                robot_radius=0.25, goal_clearance=0.40, look_radius=0.8, min_size=0.3,
                 size_weight=1.0, blacklist_radius=0.5, min_move=0.25):
     """다음 탐사 목표.
 
