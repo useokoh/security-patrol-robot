@@ -49,6 +49,7 @@
     <div class="tabs" id="tabs">
       <button data-tab="manual" class="on">수동 주행</button>
       <button data-tab="auto">자동 주행</button>
+      <button data-tab="map">지도</button>
     </div>
     <div class="tab-body" data-body="manual">
       <div class="drive">
@@ -68,6 +69,14 @@
         </div>
       </div>
       <p class="hint">컴퓨터: 방향키 또는 W·A·S·D 를 누르고 있는 동안 움직임 · [ ] = 속도 · 스페이스 = 정지</p>
+    </div>
+    <div class="tab-body" data-body="map" hidden>
+      <!-- 지도 만들기 (자율 탐사): 로봇이 스스로 돌며 지도를 채우고, 끝나면 지도와 순찰 코스를 저장한다 -->
+      <div class="mode-line" id="modeLine">모드 정보 없음</div>
+      <div class="explore-stats" id="exploreStats" hidden></div>
+      <p class="soon" id="mapHint">로봇이 스스로 돌아다니며 새 지도를 만들고, 끝나면 출발점으로 돌아와 순찰 코스까지 만듭니다.
+        그동안 순찰과 이상 감지는 멈춥니다. 로봇 주변을 비워 두세요.</p>
+      <div class="map-actions" id="mapActions"></div>
     </div>
     <div class="tab-body" data-body="auto" hidden>
       <div class="auto-head"><span>순찰 코스</span>

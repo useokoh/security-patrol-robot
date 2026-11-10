@@ -5,6 +5,8 @@
        앞뒤가 막히면 전후진만 막고, 순찰이 켜져 있으면 수동 주행을 받지 않는다.
 3단계: 코스 선택·자동 순찰 - 코스 파일 목록을 앱에 보내고, 앱이 고른 코스로 patrol_node 를 켜고 끈다.
 3.5단계: 코스 자동 만들기 - 지금 지도와 로봇 위치로 순찰 지점을 뽑아(course_planner) 미리 보여 주고 저장한다.
+3.5단계 ③: 모드 바꾸기 - app.launch.py 로 켜면(start_mode:=patrol) 앱 서버가 순찰 모드(mode_patrol.launch.py)와
+          지도 만들기 모드(mode_explore.launch.py, 자율 탐사)를 켜고 끈다 (ModeRunner).
 
   # 보통은 app.launch.py 로 한 번에 켠다 (시뮬레이션/실제 로봇 + Nav2 + 감지 + 앱 서버)
   ros2 launch security_patrol app.launch.py
@@ -37,6 +39,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from security_patrol.app_logic import (ManualDrive, ObjectBoard, build_state, encode_map, guard_speed,
                                        list_courses, scan_to_points, yaw_from_quaternion)
 from security_patrol.course_planner import plan_course
+from security_patrol.mode_runner import ModeRunner
 from security_patrol.patrol_runner import PatrolRunner
 from security_patrol.route_file import route_yaml
 from security_patrol.web_server import WebServer
@@ -62,6 +65,7 @@ class AppServer(Node):
         self.drive_lock = threading.Lock()                       # 앱 명령(웹 서버 스레드) ↔ 발행(ROS 스레드)
         self.blocked = None
         self.patrol_running = False
+        self.exploring = False
 
         # 자동 순찰: 코스 파일을 찾을 폴더 (쉼표로 여러 개). 기본은 시뮬레이션이면 패키지 config,
         # 실제 로봇이면 저장소 밖 ~/maps_real (route_recorder 가 저장하는 곳)
@@ -79,6 +83,19 @@ class AppServer(Node):
         self.runner = PatrolRunner(os.path.join(get_package_prefix('security_patrol'), 'lib', 'security_patrol',
                                                 'patrol_node'), log=self.get_logger().info)
         self.refresh_courses()
+
+        # 모드(순찰 / 지도 만들기): start_mode 가 비어 있으면 모드를 관리하지 않는다 (예전처럼 따로 켠 Nav2 를 씀)
+        self.robot = str(p('robot', 'sim' if self.sim else 'real').value)
+        self.start_mode = str(p('start_mode', '').value)
+        self.detect = bool(p('detect', True).value)
+        self.rviz = bool(p('rviz', False).value)
+        self.default_map = (os.path.join(share, 'maps', 'restricted_area.yaml') if self.sim
+                            else os.path.expanduser('~/maps_real/real_area.yaml'))
+        self.map_file = os.path.expanduser(str(p('map_file', '').value)) or self.default_map
+        self.explored_map = os.path.expanduser('~/sentinel_maps/sim/explored' if self.sim else '~/maps_real/explored_area')
+        self.modes = ModeRunner(log=self.get_logger().info)
+        self.mode_busy = False          # 모드를 바꾸는 중 (끄고 켜는 데 수십 초)
+        self.explore = None             # /explore/status 마지막 값
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -99,6 +116,7 @@ class AppServer(Node):
         self.create_subscription(String, 'anomaly/detections', self.on_detection, 10)
         self.create_subscription(Float32, 'battery_voltage', lambda m: setattr(self, 'battery', m.data), 10)
         self.create_subscription(Int32, 'rssi_strength', lambda m: setattr(self, 'rssi', m.data), 10)
+        self.create_subscription(String, 'explore/status', self.on_explore, 10)
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
         self.web = WebServer(web_dir, port=port, on_message=self.on_app_message,
@@ -107,6 +125,8 @@ class AppServer(Node):
         # 수동 주행 정지 판단은 실제 시간으로 한다 (시뮬레이션 시계가 멈추거나 느려도 끊김을 잡도록)
         self.create_timer(1.0 / drive_rate, self.drive_tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.get_logger().info(f'앱 서버 시작: http://<이 컴퓨터 주소>:{self.web.port} (화면 파일 {web_dir})')
+        if self.start_mode in ('patrol', 'explore'):
+            self.switch_mode_async(self.start_mode, self.map_file)
 
     # ---------- ROS 입력 ----------
 
@@ -130,6 +150,85 @@ class AppServer(Node):
             self.patrol = json.loads(msg.data)
         except json.JSONDecodeError:
             pass
+
+    def on_explore(self, msg):
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        done_now = data.get('state') == 'done' and (self.explore or {}).get('state') != 'done'
+        self.explore = data
+        if done_now:                                   # 탐사로 만든 코스가 목록에 보이게
+            self.get_logger().info(f'탐사 끝: 지도 {data.get("map_file")}, 코스 {data.get("course_file")}')
+            self.refresh_courses()
+            self.web.broadcast({'type': 'courses', 'courses': self.courses})
+
+    # ---------- 모드 (순찰 / 지도 만들기) ----------
+
+    def mode_command(self, mode, map_file=None):
+        cmd = ['ros2', 'launch', 'security_patrol', f'mode_{mode}.launch.py', f'robot:={self.robot}',
+               f'rviz:={"true" if self.rviz else "false"}']
+        if mode == 'patrol':
+            cmd += [f'map:={map_file or self.default_map}', f'detect:={"true" if self.detect else "false"}']
+        return cmd
+
+    def switch_mode_async(self, mode, map_file=None):
+        """모드 바꾸기는 끄고 켜는 데 시간이 걸리므로 따로 돌린다. 이미 바꾸는 중이면 False."""
+        if self.mode_busy:
+            return False
+        self.mode_busy = True
+        threading.Thread(target=self.switch_mode, args=(mode, map_file), daemon=True).start()
+        return True
+
+    def switch_mode(self, mode, map_file=None):
+        log = self.get_logger()
+        try:
+            with self.drive_lock:                      # 바꾸는 동안 아무것도 로봇을 움직이지 않게
+                self.drive.stop('mode')
+            self.runner.stop(wait=True)
+            self.modes.stop()
+            # 지난 모드의 지도·물체·순찰 정보를 지운다 (새 모드가 새 지도를 보낸다)
+            self.map_msg = self.map_raw = None
+            self.board = ObjectBoard()
+            self.patrol, self.explore = None, None
+            if mode == 'patrol':
+                self.map_file = map_file or self.default_map
+            ok = self.modes.start(mode, self.mode_command(mode, self.map_file), {'map': self.map_file})
+            text = ({'patrol': f'순찰 모드 (지도 {os.path.basename(self.map_file)})',
+                     'explore': '지도 만들기 모드 (자율 탐사)'}[mode] + (' 시작' if ok else ' 실행 실패'))
+            log.info(text)
+            self.web.broadcast({'type': 'notice', 'level': 'ok' if ok else 'bad', 'text': text})
+        finally:
+            self.mode_busy = False
+
+    def on_mode_request(self, cid, kind, msg):
+        if self.start_mode not in ('patrol', 'explore'):
+            return self.notice(cid, '모드 바꾸기는 app.launch.py 로 켰을 때만 됩니다')
+        if self.mode_busy:
+            return self.notice(cid, '모드를 바꾸는 중입니다. 잠시 기다려 주세요')
+        if kind == 'explore_start':
+            if self.modes.snapshot()['mode'] == 'explore':
+                return self.notice(cid, '이미 지도 만들기 모드입니다')
+            if self.runner.running():
+                self.web.broadcast({'type': 'notice', 'level': 'warn', 'text': '순찰을 멈추고 지도 만들기를 시작합니다'})
+            self.switch_mode_async('explore')
+        elif kind == 'map_use':                         # 탐사를 멈추거나 끝난 뒤 순찰 모드로
+            which = msg.get('which')
+            path = self.explored_map + '.yaml' if which == 'explored' else self.default_map
+            if which == 'explored' and not os.path.isfile(path):
+                return self.notice(cid, '탐사로 만든 지도가 아직 없습니다')
+            self.switch_mode_async('patrol', path)
+
+    def mode_state(self):
+        snap = self.modes.snapshot()
+        exploring = snap['mode'] == 'explore' and (self.explore or {}).get('state') not in ('done',)
+        return {'managed': self.start_mode in ('patrol', 'explore'), 'mode': snap['mode'], 'busy': self.mode_busy,
+                'crashed': snap['exited'], 'exploring': exploring,
+                'map': os.path.basename(self.map_file) if snap['mode'] == 'patrol' else None,
+                'map_kind': ('explored' if self.map_file == self.explored_map + '.yaml'
+                             else 'default' if self.map_file == self.default_map else 'custom'),
+                'explored_ready': os.path.isfile(self.explored_map + '.yaml'),
+                'explore': self.explore if snap['mode'] == 'explore' else None}
 
     def on_detection(self, msg):
         try:
@@ -161,6 +260,8 @@ class AppServer(Node):
             laps = 0
         if course not in self.course_paths:
             return self.notice(cid, '없는 코스입니다. 목록을 새로 고쳐 주세요')
+        if self.mode_busy or self.modes.snapshot()['mode'] == 'explore':
+            return self.notice(cid, '지도 만들기 모드에서는 순찰할 수 없습니다. 지도 탭에서 순찰 모드로 바꾸세요')
         if self.count_publishers('patrol/status') > 0 and not self.runner.running():
             return self.notice(cid, '터미널에서 켠 순찰이 이미 돌고 있습니다. 그 터미널에서 Ctrl+C 로 멈춘 뒤 시작하세요')
         with self.drive_lock:
@@ -246,6 +347,8 @@ class AppServer(Node):
             return self.on_course_plan(cid, msg)
         if kind == 'course_save':
             return self.on_course_save(cid, msg)
+        if kind in ('explore_start', 'map_use'):
+            return self.on_mode_request(cid, kind, msg)
         if kind == 'courses':
             self.refresh_courses()
             return self.web.send_to(cid, {'type': 'courses', 'courses': self.courses})
@@ -257,8 +360,8 @@ class AppServer(Node):
             elif kind == 'stop':
                 self.drive.stop()
             elif kind == 'drive':
-                if self.patrol_running:
-                    return                      # 순찰 중에는 받지 않는다 (앱 화면에 이유 표시)
+                if self.patrol_running or self.mode_busy or self.exploring:
+                    return                      # 순찰·탐사 중이거나 모드를 바꾸는 중에는 받지 않는다 (앱 화면에 이유 표시)
                 self.drive.command(cid, msg.get('lin'), msg.get('ang'), time.monotonic())
             else:
                 log.info(f'앱 #{cid} 명령 (아직 지원 안 함): {kind}')
@@ -272,9 +375,9 @@ class AppServer(Node):
     def drive_tick(self):
         now = time.monotonic()
         with self.drive_lock:
-            if self.patrol_running and self.drive.owner is not None:
+            if (self.patrol_running or self.exploring) and self.drive.owner is not None:
                 self.drive.stop('patrol')
-                self.get_logger().warn('순찰이 켜져서 수동 주행을 멈춤')
+                self.get_logger().warn('순찰·탐사가 켜져서 수동 주행을 멈춤')
             before = self.drive.owner
             out = self.drive.step(now)
             timed_out = before is not None and self.drive.owner is None
@@ -328,6 +431,8 @@ class AppServer(Node):
         # 순찰 노드가 살아 있는지: patrol/status 를 내는 쪽(patrol_node)이 있으면 순찰 중
         external = self.count_publishers('patrol/status') > 0 and not self.runner.running()
         self.patrol_running = self.runner.running() or self.count_publishers('patrol/status') > 0
+        mode = self.mode_state()
+        self.exploring = mode['exploring']
         if self.web.client_count() == 0:
             return
         points = self.scan_points(self.scan_step)
@@ -345,7 +450,7 @@ class AppServer(Node):
         self.web.broadcast(build_state(robot, points, self.battery, self.rssi, self.patrol,
                                        self.board.snapshot(now), localized, now,
                                        manual=manual, patrol_running=self.patrol_running,
-                                       patrol_app=patrol_app))
+                                       patrol_app=patrol_app, mode=mode))
 
 
 def main():
@@ -358,6 +463,7 @@ def main():
         pass
     finally:
         node.runner.stop(wait=True)          # 앱이 켠 순찰도 함께 끈다 (이동 취소)
+        node.modes.stop()                    # 앱이 켠 모드(Nav2·감지·탐사)도 함께 끈다
         node.stop_robot()
         node.web.stop()
         node.destroy_node()

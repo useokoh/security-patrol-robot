@@ -195,6 +195,25 @@ agent 는 가상머신 안에서 돌기 때문에, 맥이 로봇 패킷을 가�
 RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 물체가 색으로 보입니다
 (소형 노랑 / 중형 주황 / 대형 빨강, 확정 전 후보는 회색).
 
+## 자율 탐사 (로봇이 스스로 지도와 코스 만들기)
+
+사람이 키보드로 몰며 지도를 만들고 지점을 찍던 일을 로봇이 대신합니다.
+로봇이 아는 곳과 모르는 곳의 경계(프런티어)를 찾아 스스로 이동하며 지도를 채우고, 경계가 더 없으면
+출발점으로 돌아와 지도를 저장한 뒤 그 지도로 순찰 코스까지 만듭니다(`explorer`, `explore_logic.py`).
+
+```bash
+# 시뮬레이션: 지도 ~/sentinel_maps/sim/explored.yaml, 코스 ~/sentinel_courses/sim/explored_course.yaml
+ros2 launch security_patrol explore.launch.py
+# 실제 로봇 (기존 지도를 덮어쓰지 않게 ~/maps_real/explored_area.yaml, patrol_route_explored.yaml 로 저장)
+ros2 launch security_patrol explore.launch.py robot:=real
+# 진행 상황 보기
+ros2 topic echo /explore/status
+```
+
+- 목표 고르기: 경계 근처 아는 빈칸 중 벽에서 0.3 m 이상 떨어진 곳, '가깝고 큰 경계'부터. 가는 도중 경계가 이미 보이면 다음 목표로.
+- 막힘 방지: 못 간 곳은 다시 고르지 않고, 서 있거나 가 본 자리에서도 안 보이는 경계는 다른 관찰 지점을 한 번 더 시도한 뒤 포기.
+- 탐사 지도의 원점은 탐사를 시작한 로봇 위치입니다. 그 지도로 순찰할 때도 같은 자리·방향에서 시작합니다.
+
 ## 관제 앱 (레이더 화면, 수동 주행, 코스 선택·자동 순찰)
 
 휴대폰·노트북 브라우저로 로봇을 보는 웹 앱입니다. 설치가 필요 없고, 가상머신의 `app_server` 노드가 화면 파일과 실시간 데이터를 함께 보냅니다.
@@ -217,16 +236,23 @@ RViz 에서 `Add → By topic → /anomaly/markers` 를 추가하면 감지된 �
   - 앱 서버가 `patrol_node` 를 대신 켜고 끕니다. 코스 파일은 시뮬레이션이면 패키지 `config/`, 실제 로봇이면 `~/maps_real/`
     에서 찾습니다(`course_dirs` 파라미터로 바꿀 수 있음). 터미널에서 켠 순찰은 앱에서 멈추지 않고 그대로 둡니다.
 
-명령 하나로 로봇·Nav2·이상 감지·앱 서버를 모두 켭니다. 그다음은 앱에서 합니다.
+명령 하나로 로봇과 앱 서버를 켭니다. 앱 서버가 '모드'를 켜고 끕니다:
+처음에는 **순찰 모드**(기준 지도 + AMCL + Nav2 + 이상 감지), 앱의 `지도` 탭에서 `지도 만들기 시작`을 누르면
+**지도 만들기 모드**(slam_toolbox + Nav2 + 자율 탐사)로 바뀌고, 탐사가 끝나면 `새 지도로 순찰 모드 시작`.
 
 ```bash
 # 시뮬레이션
 ros2 launch security_patrol app.launch.py
 # 실제 로봇 (맥에서 tools/microros_udp_relay.py 를 먼저 켬, 회전 상한 1.8 등 실제 로봇 설정이 자동으로 들어감)
 ros2 launch security_patrol app.launch.py robot:=real
-# 선택: RViz 도 보기, 이상 감지 끄기
+# 선택: RViz 도 보기, 이상 감지 끄기, 탐사로 만든 지도로 시작
 ros2 launch security_patrol app.launch.py rviz:=true detect:=false
+ros2 launch security_patrol app.launch.py map:=$HOME/sentinel_maps/sim/explored.yaml
 ```
+
+- `지도` 탭: 지금 모드와 지도, 탐사 중에는 알아낸 넓이·가 본 목표·남은 경계와 지도가 자라는 모습(지도 화면), 지금 가는 탐사 목표(주황 과녁).
+  탐사 중에는 순찰·수동 주행·이상 감지가 멈춥니다. 탐사를 멈추면 지금까지 만든 지도는 저장되지 않습니다.
+- 앱 서버를 끄면 앱이 켠 순찰과 모드(Nav2·감지·탐사)도 함께 꺼집니다.
 
 맥 브라우저에서 `http://192.168.64.2:8080` (가상머신 주소) 을 엽니다.
 ROS 없이 화면만 보려면 맥에서 `python3 tools/app_preview.py` 를 실행하고 `http://localhost:8765` 를 엽니다
@@ -258,10 +284,17 @@ src/security_patrol/
 ├── security_patrol/loc_monitor.py  # AMCL 위치추정 점검 노드
 ├── security_patrol/patrol_node.py  # 반복 순찰 노드
 ├── security_patrol/anomaly_detector.py  # 지도 비교 이상 감지 노드
-├── launch/app.launch.py            # 관제 앱 한 번에 켜기 (로봇 + Nav2 + 감지 + 앱 서버)
+├── launch/app.launch.py            # 관제 앱 한 번에 켜기 (로봇 바탕 + 앱 서버, 앱 서버가 모드를 켬)
+├── launch/robot_base.launch.py     # 로봇 바탕만 (시뮬레이션 또는 실제 로봇 연결)
+├── launch/mode_patrol.launch.py    # 순찰 모드 (map_server + AMCL + Nav2 + 감지)
+├── launch/mode_explore.launch.py   # 지도 만들기 모드 (slam_toolbox + Nav2 + explorer)
+├── security_patrol/mode_runner.py  # 앱 서버의 모드 켜고 끄기 (ros2 launch 묶음)
 ├── security_patrol/app_server.py  # 관제 앱 서버 노드 (ROS 데이터 → 브라우저)
 ├── security_patrol/patrol_runner.py  # 앱에서 patrol_node 켜고 끄기
 ├── security_patrol/course_planner.py # 지도에서 순찰 코스 자동 만들기
+├── launch/explore.launch.py        # 자율 탐사 한 번에 켜기 (로봇 + SLAM + Nav2 + explorer)
+├── security_patrol/explorer.py     # 자율 탐사 노드 (끝나면 지도·코스 저장)
+├── security_patrol/explore_logic.py # 프런티어 찾기·목표 고르기
 ├── security_patrol/web_server.py  # 정적 파일 + WebSocket 서버 (표준 라이브러리만)
 └── web/                           # 관제 앱 화면 (index.html, app.js, style.css)
 ```

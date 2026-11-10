@@ -21,6 +21,7 @@ PKG = os.path.join(HERE, '..', 'src', 'security_patrol')
 sys.path.insert(0, os.path.join(PKG, 'security_patrol'))
 from app_logic import ManualDrive, ObjectBoard, build_state, encode_map, guard_speed, scan_to_points  # noqa: E402
 from course_planner import plan_course  # noqa: E402
+from explore_logic import choose_goal, known_area  # noqa: E402
 from web_server import WebServer  # noqa: E402
 
 # 가짜 방: 6 × 4 m 벽 + 가운데 상자 + 칸막이 (선분 목록)
@@ -135,6 +136,72 @@ class FakePatrol:
         return (x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt, yaw), None
 
 
+class FakeExplorer:
+    """explorer 흉내: 빈 지도에서 시작해 가짜 방을 라이다(ray)로 조금씩 밝히며 explore_logic 으로 목표를 고른다."""
+
+    def __init__(self, home, t):
+        self.known = [-1] * (MAP_W * MAP_H)
+        self.home, self.started = home, t
+        self.goal, self.blacklist, self.visited = None, [], []
+        self.state, self.goals, self.frontiers, self.until = 'starting', 0, None, t + 2.0
+
+    def reveal(self, x, y, rng=3.0):
+        for k in range(0, 360, 2):
+            a = math.radians(k)
+            hit = ray(x, y, a, WALLS)
+            n = int(min(hit, rng) / (RES * 0.5))
+            for s in range(1, n + 1):
+                c = int((x + math.cos(a) * s * RES * 0.5 - ORIGIN[0]) / RES)
+                r = int((y + math.sin(a) * s * RES * 0.5 - ORIGIN[1]) / RES)
+                if 0 <= c < MAP_W and 0 <= r < MAP_H and self.known[r * MAP_W + c] != 100:
+                    self.known[r * MAP_W + c] = 0
+            if hit <= rng:
+                c = int((x + math.cos(a) * (hit + RES * 0.3) - ORIGIN[0]) / RES)
+                r = int((y + math.sin(a) * (hit + RES * 0.3) - ORIGIN[1]) / RES)
+                if 0 <= c < MAP_W and 0 <= r < MAP_H:
+                    self.known[r * MAP_W + c] = 100
+
+    def status(self, t):
+        return {'state': self.state, 'known_area': round(known_area(self.known, RES), 2), 'goals': self.goals,
+                'failed': 0, 'abandoned': len(self.blacklist), 'frontiers': self.frontiers,
+                'elapsed': round(t - self.started), 'goal': list(self.goal) if self.goal else None}
+
+    def step(self, pose, t, dt):
+        x, y, yaw = pose
+        if self.state == 'starting':
+            if t >= self.until:
+                self.state = 'exploring'
+                self.reveal(x, y)
+            return pose
+        if self.state in ('saving', 'done'):
+            if self.state == 'saving' and t >= self.until:
+                self.state = 'done'
+            return pose
+        if self.goal is None and self.state == 'exploring':
+            pick = choose_goal(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], self.known, (x, y), self.blacklist, self.visited)
+            self.blacklist += pick['abandon']
+            self.frontiers = pick['frontiers']
+            if pick['goal'] is None:
+                self.state, self.goal = 'returning', self.home[:2]
+            else:
+                self.goal = pick['goal']
+                self.goals += 1
+        gx, gy = self.goal
+        dist = math.hypot(gx - x, gy - y)
+        if dist < 0.05:
+            if self.state == 'returning':
+                self.state, self.until = 'saving', t + 1.5
+            else:
+                self.visited.append(self.goal)
+            self.goal = None
+            return (x, y, yaw)
+        yaw = math.atan2(gy - y, gx - x)
+        step = min(dist, 0.5 * dt)                 # 미리보기라 실제보다 빠르게 (0.5 m/s)
+        x, y = x + step * math.cos(yaw), y + step * math.sin(yaw)
+        self.reveal(x, y)
+        return (x, y, yaw)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, default=8765)
@@ -143,7 +210,23 @@ def main():
     map_msg, map_data = make_map()
     plans = {}
     drive, lock = ManualDrive(max_linear=0.3, max_angular=1.2), threading.Lock()
-    sim = {'patrol': FakePatrol(COURSES[0], 0, 'external') if args.patrol else None, 'last': None, 'status': None}
+    sim = {'patrol': FakePatrol(COURSES[0], 0, 'external') if args.patrol else None, 'last': None, 'status': None,
+           # 모드 흉내: 순찰 / 지도 만들기. 바꾸는 데 2초 걸리는 척한다
+           'mode': 'patrol', 'busy_until': 0.0, 'next': None, 'explorer': None, 'map_kind': 'default',
+           'explored': None, 'map': map_data, 'map_sent': 0.0}
+
+    def map_message(data):
+        return encode_map(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], 0.0, data)
+
+    def mode_state(t):
+        ex = sim['explorer']
+        exploring = sim['mode'] == 'explore' and ex is not None and ex.state != 'done'
+        return {'managed': True, 'mode': None if t < sim['busy_until'] else sim['mode'],
+                'busy': t < sim['busy_until'], 'crashed': False, 'exploring': exploring,
+                'map': {'default': 'fake_room.yaml', 'explored': 'explored.yaml'}[sim['map_kind']]
+                if sim['mode'] == 'patrol' else None,
+                'map_kind': sim['map_kind'], 'explored_ready': sim['explored'] is not None,
+                'explore': ex.status(time.time() - t0) if sim['mode'] == 'explore' and ex else None}
 
     def notice(cid, text, level='warn'):
         web.send_to(cid, {'type': 'notice', 'level': level, 'text': text})
@@ -156,11 +239,28 @@ def main():
                 drive.disconnect(cid)
             elif kind == 'stop':
                 drive.stop()
-            elif kind == 'drive' and patrol is None:
+            elif kind in ('explore_start', 'map_use'):
+                now = time.time() - t0
+                if now < sim['busy_until']:
+                    notice(cid, '모드를 바꾸는 중입니다. 잠시 기다려 주세요')
+                elif kind == 'explore_start':
+                    sim['patrol'] = None
+                    drive.stop('mode')
+                    sim['busy_until'], sim['next'] = now + 2.0, ('explore', None)
+                elif msg.get('which') == 'explored' and sim['explored'] is None:
+                    notice(cid, '탐사로 만든 지도가 아직 없습니다')
+                else:
+                    which = 'explored' if msg.get('which') == 'explored' else 'default'
+                    drive.stop('mode')
+                    sim['busy_until'], sim['next'] = now + 2.0, ('patrol', which)
+            elif kind == 'drive' and patrol is None and not mode_state(time.time() - t0)['exploring'] \
+                    and time.time() - t0 >= sim['busy_until']:
                 drive.command(cid, msg.get('lin'), msg.get('ang'), time.monotonic())
             elif kind == 'patrol_start':
                 course = next((c for c in COURSES if c['id'] == msg.get('course')), None)
-                if patrol is not None:
+                if sim['mode'] == 'explore' or time.time() - t0 < sim['busy_until']:
+                    notice(cid, '지도 만들기 모드에서는 순찰할 수 없습니다')
+                elif patrol is not None:
                     notice(cid, '이미 순찰 중입니다')
                 elif course is None:
                     notice(cid, '없는 코스입니다')
@@ -178,7 +278,8 @@ def main():
                     web.broadcast({'type': 'notice', 'level': 'ok', 'text': '순찰을 멈추는 중입니다 (이동 취소)'})
             elif kind == 'course_plan':                 # 실제 앱 서버와 같은 계산 (course_planner)
                 try:
-                    plan = plan_course(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], map_data, pose[:2],
+                    current = sim['explorer'].known if sim['mode'] == 'explore' and sim['explorer'] else sim['map']
+                    plan = plan_course(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], current, pose[:2],
                                        view_range=float(msg.get('view', 2.5)))
                     plan.update(id='__plan__', name='자동 코스 (미리보기)', dwell=2.0)
                     plans[cid] = plan
@@ -201,7 +302,10 @@ def main():
     def on_connect(cid):
         web.send_to(cid, {'type': 'hello', 'id': cid})
         web.send_to(cid, {'type': 'courses', 'courses': COURSES})
-        web.send_to(cid, map_msg)
+        if sim['mode'] == 'explore' and sim['explorer']:
+            web.send_to(cid, map_message(sim['explorer'].known))
+        elif time.time() - t0 >= sim['busy_until']:
+            web.send_to(cid, map_message(sim['map']))
 
     web = WebServer(os.path.join(PKG, 'web'), host='127.0.0.1', port=args.port,
                     on_message=on_message, on_connect=on_connect).start_in_thread()
@@ -229,6 +333,37 @@ def main():
                     sim['last'] = {'course': patrol.course['id'], 'code': 0, 'stopped': end == 'stopped'}
                     sim['patrol'] = None
                     print(f'순찰 끝남: {end}')
+            if sim['next'] and t >= sim['busy_until']:        # 모드 바꾸기 끝 → 새 모드 시작
+                mode, which = sim['next']
+                sim['next'], sim['mode'], sim['status'] = None, mode, None
+                board = ObjectBoard()
+                if mode == 'explore':
+                    sim['explorer'] = FakeExplorer(pose, t)
+                else:
+                    sim['explorer'], sim['map_kind'] = None, which
+                    sim['map'] = sim['explored'] if which == 'explored' else map_data
+                    web.broadcast(map_message(sim['map']))
+                web.broadcast({'type': 'notice', 'level': 'ok',
+                               'text': '지도 만들기 모드 시작' if mode == 'explore' else '순찰 모드 시작'})
+            ex = sim['explorer']
+            if sim['mode'] == 'explore' and ex is not None and not sim['next']:
+                was = ex.state
+                pose = ex.step(pose, t, dt)
+                if t - sim['map_sent'] > 1.0:               # 탐사 중에는 지도가 자라는 모습을 1초마다
+                    sim['map_sent'] = t
+                    web.broadcast(map_message(ex.known))
+                if ex.state == 'done' and was != 'done':    # 지도 저장 + 탐사 지도로 코스 만들기
+                    sim['explored'] = list(ex.known)
+                    web.broadcast(map_message(ex.known))
+                    try:
+                        plan = plan_course(MAP_W, MAP_H, RES, ORIGIN[0], ORIGIN[1], ex.known, ex.home[:2])
+                        COURSES[:] = [c for c in COURSES if c['id'] != 'explored_course']
+                        COURSES.append({'id': 'explored_course', 'name': '탐사로 만든 코스', 'dwell': 2.0,
+                                        'points': plan['points']})
+                        web.broadcast({'type': 'courses', 'courses': COURSES})
+                    except ValueError as e:
+                        print(f'탐사 지도로 코스를 못 만듦: {e}')
+                    print(f'탐사 끝: {ex.goals}곳, {known_area(ex.known, RES):.1f} m²')
             out = drive.step(time.monotonic())
         blocked = None
         if patrol is None and out is not None:      # 조이스틱 명령대로 움직임 (서버와 같은 규칙)
@@ -250,11 +385,13 @@ def main():
                               'stopping': running and patrol.stop_at is not None,
                               'owner': patrol.owner if running else None, 'last': sim['last']}
                 status = sim['status']
+                mode = mode_state(t)
             manual['blocked'] = blocked
             rx, ry, ryaw = pose
+            objects = [] if mode['mode'] != 'patrol' else board.snapshot(t)   # 감지는 순찰 모드에서만
             web.broadcast(build_state(pose, fake_scan(rx, ry, ryaw, people, 2), 7.38, -54, status,
-                                      board.snapshot(t), True, t, manual=manual, patrol_running=running,
-                                      patrol_app=patrol_app))
+                                      objects, True, t, manual=manual, patrol_running=running,
+                                      patrol_app=patrol_app, mode=mode))
         time.sleep(dt)
 
 

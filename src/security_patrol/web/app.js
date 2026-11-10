@@ -6,6 +6,8 @@
 //   state.patrol_app : 앱이 켠 순찰 {running, course, laps, stopping, owner('app'|'external'|null), last}
 // 앱 → 서버: {type:'drive', lin, ang} (-1~1, 누르고 있는 동안 0.1초마다), {type:'stop'},
 //            {type:'patrol_start', course, laps}, {type:'patrol_stop'}, {type:'courses'} (목록 새로 고침)
+//            {type:'explore_start'} (지도 만들기 모드), {type:'map_use', which:'explored'|'default'} (순찰 모드로)
+//   state.mode : {managed, mode('patrol'|'explore'|null), busy, exploring, map, map_kind, explored_ready, explore}
 'use strict';
 
 const COLORS = {
@@ -182,6 +184,18 @@ function drawLabels(labels, toScreen) {
   ctx.textBaseline = 'alphabetic';
 }
 
+// 지도 기준 좌표계에서 그리기: 탐사 목표 (주황 과녁)
+function drawExploreGoal(s, px) {
+  const ex = s && s.mode && s.mode.exploring && s.mode.explore;
+  if (!ex || !ex.goal) return;
+  const [x, y] = ex.goal, dpr = window.devicePixelRatio || 1, r = Math.max(0.08, 8 * dpr * px);
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+  ctx.strokeStyle = `rgba(245, 165, 36, ${0.5 + 0.5 * pulse})`; ctx.lineWidth = 2 * dpr * px;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, y, r * 1.8, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#f5a524'; ctx.beginPath(); ctx.arc(x, y, r * 0.35, 0, Math.PI * 2); ctx.fill();
+}
+
 // 지도 기준 좌표계에서 그리기: 순찰 코스 (점선 경로 + 번호 원). 지금 가는 지점은 주황색으로 깜박인다
 function drawCourse(course, current, px, labels) {
   if (!course || !course.points.length) return;
@@ -250,6 +264,7 @@ function draw() {
       drawMapImage();
       ctx.globalAlpha = 1;
       drawCourse(activeCourse(), currentPoint(), px, labels);
+      drawExploreGoal(s, px);
       drawObjects(s.objects, px, labels);
       ctx.restore();
     }
@@ -277,6 +292,7 @@ function draw() {
     ctx.setTransform(k, 0, 0, -k, W / 2 - vx * k, H / 2 + vy * k);
     drawMapImage();
     drawCourse(activeCourse(), currentPoint(), px, labels);
+    drawExploreGoal(s, px);
     drawObjects(s && s.objects, px, labels);
     if (robot) {
       ctx.save(); ctx.translate(robot.x, robot.y); ctx.rotate(robot.yaw);
@@ -321,6 +337,7 @@ function updateStatus() {
   else $('patrol').innerHTML = `순찰 <b>꺼짐</b>${p ? ' (마지막' + where + ')' : ''}`;
   updateDrive(s, fresh);
   updateAuto(s, fresh);
+  updateMapTab(s, fresh);
 }
 
 // 수동 주행 탭 글자와 조이스틱 잠금
@@ -331,6 +348,8 @@ function updateDrive(s, fresh) {
   const m = s && s.manual, mine = m && m.owner != null && m.owner === state.myId;
   let text = '조이스틱으로 조종하세요', cls = '', locked = false;
   if (!state.connected || !fresh) { text = '로봇과 연결되어 있지 않습니다'; cls = 'bad'; locked = true; }
+  else if (s.mode && s.mode.busy) { text = '모드를 바꾸는 중입니다'; cls = 'warn'; locked = true; }
+  else if (s.mode && s.mode.exploring) { text = '자율 탐사 중입니다'; cls = 'warn'; locked = true; }
   else if (s.patrol_running && s.patrol_app && s.patrol_app.owner === 'app') { text = '자동 순찰 중입니다'; cls = 'warn'; locked = true; }
   else if (s.patrol_running) { text = '터미널에서 켠 순찰 중에는 수동 주행을 할 수 없습니다'; cls = 'warn'; locked = true; }
   else if (m && m.owner != null && !mine) { text = '다른 화면에서 조종 중입니다'; cls = 'warn'; locked = true; }
@@ -504,6 +523,8 @@ function activeCourse() {
   if (pa && pa.running && pa.course) return courseById(pa.course);
   if (state.last && state.last.patrol_running) return null;    // 터미널에서 켠 순찰: 코스를 모름
   if (state.planOpen) return state.plan;                         // 자동 만들기 미리보기
+  const md = state.last && state.last.mode;
+  if (md && (md.busy || md.mode === 'explore')) return null;     // 탐사 중에는 코스 대신 탐사 목표를 보인다
   return courseById(state.selectedCourse);
 }
 
@@ -558,6 +579,7 @@ function updateAuto(s, fresh) {
   const btn = $('patrolBtn');
   btn.classList.toggle('stop', mine);
   if (!state.connected || !fresh) { btn.textContent = '연결 안 됨'; btn.disabled = true; }
+  else if (s.mode && (s.mode.busy || s.mode.mode === 'explore')) { btn.textContent = '지도 만들기 모드에서는 순찰할 수 없음'; btn.disabled = true; }
   else if (mine && pa.stopping) { btn.textContent = '멈추는 중…'; btn.disabled = true; }
   else if (mine) { btn.textContent = '순찰 정지'; btn.disabled = false; }
   else if (running) { btn.textContent = '터미널에서 켠 순찰이 도는 중'; btn.disabled = true; }
@@ -605,6 +627,75 @@ $('patrolBtn').addEventListener('click', () => {
 });
 $('stopPatrolForManual').addEventListener('click', () => send({ type: 'patrol_stop' }));
 $('refreshCourses').addEventListener('click', () => send({ type: 'courses' }));
+
+// ---------- 지도 탭 (지도 만들기 = 자율 탐사) ----------
+// 버튼은 상태가 바뀔 때만 다시 만든다 (매 화면마다 만들면 누르는 도중 사라진다)
+
+const EXPLORE_WORDS = { starting: '준비 중 (SLAM·Nav2 켜는 중)', exploring: '탐사 중', returning: '출발점으로 돌아가는 중',
+  saving: '지도·코스 저장 중', done: '탐사 끝' };
+let mapActionsKey = '';
+
+function mapButton(text, cls, onClick) {
+  const b = document.createElement('button');
+  b.className = 'go ' + cls; b.textContent = text;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function updateMapTab(s, fresh) {
+  const md = (s && s.mode) || {}, ex = md.explore || {};
+  let line, key;
+  if (!state.connected || !fresh) { line = '로봇과 연결되어 있지 않습니다'; key = 'off'; }
+  else if (!md.managed) { line = '모드 바꾸기는 <b>app.launch.py</b> 로 켰을 때만 됩니다'; key = 'unmanaged'; }
+  else if (md.busy) { line = '모드를 바꾸는 중입니다… (수십 초 걸립니다)'; key = 'busy'; }
+  else if (md.mode === 'explore') {
+    line = `<b>지도 만들기 모드</b> · ${EXPLORE_WORDS[ex.state] || '준비 중'}`;
+    key = 'explore-' + (ex.state === 'done' ? 'done' : 'run') + (md.explored_ready ? '-ready' : '');
+  } else if (md.mode === 'patrol') {
+    const kind = { explored: '탐사로 만든 지도', default: '기본 지도', custom: '지정한 지도' }[md.map_kind] || '';
+    line = `<b>순찰 모드</b> · ${kind} (${escapeHtml(md.map || '')})`;
+    key = 'patrol-' + md.map_kind + (md.explored_ready ? '-ready' : '');
+  } else { line = md.crashed ? '모드 프로그램이 꺼졌습니다. 앱 서버 터미널을 확인하세요' : '모드 없음'; key = 'none'; }
+  $('modeLine').innerHTML = line;
+
+  // 탐사 진행: 아는 넓이, 간 목표 수, 남은 경계 / 걸린 시간
+  const showStats = md.mode === 'explore' && ex.state;
+  $('exploreStats').hidden = !showStats;
+  if (showStats) {
+    const mins = Math.floor((ex.elapsed || 0) / 60), secs = (ex.elapsed || 0) % 60;
+    $('exploreStats').innerHTML =
+      `<div class="stat"><b>${(ex.known_area || 0).toFixed(1)} m²</b><span>알아낸 넓이</span></div>`
+      + `<div class="stat"><b>${ex.goals || 0}곳</b><span>가 본 목표${ex.failed ? ` (실패 ${ex.failed})` : ''}</span></div>`
+      + `<div class="stat"><b>${ex.state === 'done' ? '끝' : (ex.frontiers != null ? ex.frontiers + '개' : '-')}</b>`
+      + `<span>${ex.state === 'done' ? `${mins}분 ${secs}초` : '남은 경계'}</span></div>`;
+  }
+  $('mapHint').hidden = md.mode === 'explore';
+
+  if (key === mapActionsKey) return;
+  mapActionsKey = key;
+  const box = $('mapActions');
+  box.innerHTML = '';
+  if (key.startsWith('patrol')) {
+    box.append(mapButton('지도 만들기 시작 (자율 탐사)', 'explore', () => {
+      if (window.confirm('순찰과 이상 감지를 멈추고, 로봇이 스스로 돌아다니며 새 지도를 만듭니다. 시작할까요?')) {
+        releaseAll(); send({ type: 'explore_start' });
+      }
+    }));
+    if (md.explored_ready && md.map_kind !== 'explored') {
+      box.append(mapButton('탐사로 만든 지도로 순찰 모드', '', () => send({ type: 'map_use', which: 'explored' })));
+    }
+    if (md.map_kind !== 'default') {
+      box.append(mapButton('기본 지도로 순찰 모드', '', () => send({ type: 'map_use', which: 'default' })));
+    }
+  } else if (key.startsWith('explore-run')) {
+    box.append(mapButton('탐사 멈추고 기본 지도로', 'stop', () => {
+      if (window.confirm('탐사를 멈춥니다. 지금까지 만든 지도는 저장되지 않습니다. 멈출까요?')) send({ type: 'map_use', which: 'default' });
+    }));
+  } else if (key.startsWith('explore-done')) {
+    box.append(mapButton('새 지도로 순찰 모드 시작', '', () => send({ type: 'map_use', which: 'explored' })));
+    box.append(mapButton('기본 지도로 돌아가기', 'stop', () => send({ type: 'map_use', which: 'default' })));
+  }
+}
 
 // ---------- 코스 자동 만들기 ----------
 // 서버가 지금 지도와 로봇 위치로 지점을 뽑아 보내 준다 (course_planner). 저장하면 코스 목록에 들어간다.

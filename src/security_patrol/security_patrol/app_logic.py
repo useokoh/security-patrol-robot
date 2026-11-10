@@ -216,7 +216,7 @@ def list_courses(dirs):
 
 
 def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, now,
-                manual=None, patrol_running=None, patrol_app=None):
+                manual=None, patrol_running=None, patrol_app=None, mode=None):
     """앱에 주기적으로 보내는 상태 한 덩어리."""
     robot = None
     if robot_pose is not None:
@@ -225,4 +225,4 @@ def build_state(robot_pose, points, battery, rssi, patrol, objects, localized, n
     return {'type': 'state', 't': round(now, 2), 'robot': robot, 'localized': localized,
             'scan': points, 'battery': None if battery is None else round(battery, 2),
             'rssi': rssi, 'patrol': patrol, 'patrol_running': patrol_running,
-            'objects': objects, 'manual': manual, 'patrol_app': patrol_app}
+            'objects': objects, 'manual': manual, 'patrol_app': patrol_app, 'mode': mode}
